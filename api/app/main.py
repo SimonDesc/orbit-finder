@@ -7,10 +7,15 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
 
 from app import orbits, stac
 from app.config import get_settings
 from app.geo import BBox
+from app.interpret import InterpretError, interpret
+from app.llm import get_llm_client
+from app.ratelimit import RateLimiter
 
 settings = get_settings()
 
@@ -51,6 +56,34 @@ Box = Annotated[BBox, Depends(bbox_param)]
 @api.get("/health")
 def health() -> dict:
     return {"status": "ok", "llm_configured": bool(settings.openrouter_api_key)}
+
+
+class InterpretRequest(BaseModel):
+    text: str = Field(min_length=3, max_length=500)
+
+
+def llm_client() -> AsyncOpenAI:
+    if not settings.openrouter_api_key:
+        raise HTTPException(503, "LLM is not configured (OPENROUTER_API_KEY missing)")
+    return get_llm_client()
+
+
+@api.post(
+    "/interpret",
+    summary="Turn a natural-language request into a structured search",
+    dependencies=[Depends(RateLimiter(max_calls=10, per_seconds=60))],
+)
+async def interpret_endpoint(
+    body: InterpretRequest,
+    http: Http,
+    llm: Annotated[AsyncOpenAI, Depends(llm_client)],
+) -> dict:
+    try:
+        return await interpret(llm, settings.llm_model, http, body.text, datetime.now(UTC).date())
+    except InterpretError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"Geocoding unavailable: {exc}") from exc
 
 
 @api.get("/scenes", summary="Sentinel-2 L2A scenes intersecting an area")

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # LLM via OpenRouter (OpenAI-compatible API). The model is swappable without code changes.
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    llm_model: str = "mistralai/mistral-small-3.2-24b-instruct"
+    llm_model: str = "mistralai/mistral-small-2603"
 
     # Public data sources
     stac_url: str = "https://earth-search.aws.element84.com/v1"
