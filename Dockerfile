@@ -20,4 +20,7 @@ COPY --from=web /web/dist ./static
 RUN useradd --create-home appuser && chown appuser /app/data
 USER appuser
 EXPOSE 8000
+# The slim image has no curl/wget: probe with Python (Coolify honours a Dockerfile HEALTHCHECK).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
 CMD ["/app/.venv/bin/uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
