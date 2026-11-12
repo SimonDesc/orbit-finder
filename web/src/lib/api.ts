@@ -1,19 +1,32 @@
 import type { Feature, LineString, MultiPolygon, Polygon } from 'geojson'
 
 export type BBox = [west: number, south: number, east: number, north: number]
-export type Sensor = 'optical' | 'radar' | 'any'
+
+export interface SatApp {
+  id: string
+  name: string
+  partner: string
+  category: string
+  summary: string
+  sensor: 'optical' | 'thermal'
+  needs_daylight: boolean
+  output: string
+  latency_min: number
+  price_eur_per_pass: number
+}
 
 export interface SearchQuery {
   place: string
   bbox: BBox
-  date_from: string // YYYY-MM-DD
+  date_from: string // YYYY-MM-DD, period of interest (reference imagery)
   date_to: string
-  sensor: Sensor
   max_cloud: number
 }
 
 export interface InterpretResponse {
   intent: string
+  app_id: string | null
+  app_reason: string
   query: SearchQuery
   warnings: string[]
 }
@@ -78,6 +91,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export const fetchApps = () => request<SatApp[]>('/api/apps')
+
 export function interpret(text: string, signal?: AbortSignal) {
   return request<InterpretResponse>('/api/interpret', {
     method: 'POST',
@@ -104,3 +119,10 @@ export function predictPasses(bbox: BBox, days = 5, signal?: AbortSignal) {
   const params = new URLSearchParams({ bbox: bboxParam(bbox), days: String(days) })
   return request<PassesResponse>(`/api/passes?${params}`, { signal })
 }
+
+/** Absolute URL template: MapLibre loads tiles from a worker, which needs the origin. */
+export const sceneTilesUrl = (sceneId: string) =>
+  `${window.location.origin}/api/scenes/${sceneId}/tiles/{z}/{x}/{y}.webp`
+
+/** A pass can run the app if the sensor works at that time (optical needs daylight). */
+export const canRun = (app: SatApp, pass: Pass) => !app.needs_daylight || pass.daylight

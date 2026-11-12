@@ -1,64 +1,107 @@
-import { Orbit } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { CalendarRange, MapPin, Orbit, TriangleAlert } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
+import { AppCard } from '@/components/AppCard'
 import { MapView } from '@/components/MapView'
-import { PassList } from '@/components/PassList'
-import { QueryPanel } from '@/components/QueryPanel'
+import { OpportunityList } from '@/components/OpportunityList'
 import { SceneList } from '@/components/SceneList'
 import { SearchBar } from '@/components/SearchBar'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Input } from '@/components/ui/input'
 import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   type BBox,
+  canRun,
+  fetchApps,
+  interpret,
   type Pass,
+  predictPasses,
+  type SatApp,
   type Scene,
   type SearchQuery,
-  interpret,
-  predictPasses,
   searchScenes,
 } from '@/lib/api'
+import { todayIso } from '@/lib/format'
+
+const LOOKBACK_DAYS = 60
+const daysBefore = (iso: string, days: number) =>
+  new Date(new Date(iso).getTime() - days * 86_400_000).toISOString().slice(0, 10)
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
 
+/** The least cloudy recent image makes the best reference. */
+const bestScene = (scenes: Scene[]) =>
+  scenes.reduce<Scene | null>(
+    (best, s) =>
+      !best || (s.properties.cloud_cover ?? 100) < (best.properties.cloud_cover ?? 100) ? s : best,
+    null,
+  )
+
 export default function App() {
+  const [apps, setApps] = useState<SatApp[]>([])
   const [interpreting, setInterpreting] = useState(false)
   const [intent, setIntent] = useState<string | null>(null)
+  const [appId, setAppId] = useState<string | null>(null)
+  const [recommendedId, setRecommendedId] = useState<string | null>(null)
+  const [appReason, setAppReason] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [query, setQuery] = useState<SearchQuery | null>(null)
 
   const [scenes, setScenes] = useState<Scene[]>([])
   const [matched, setMatched] = useState<number | null>(null)
   const [scenesLoading, setScenesLoading] = useState(false)
+  const [scenesError, setScenesError] = useState<string | null>(null)
   const [passes, setPasses] = useState<Pass[]>([])
   const [passesLoading, setPassesLoading] = useState(false)
-  const [tleAge, setTleAge] = useState<number | null>(null)
-  const [scenesError, setScenesError] = useState<string | null>(null)
   const [passesError, setPassesError] = useState<string | null>(null)
+  const [tleAge, setTleAge] = useState<number | null>(null)
 
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
+  const [focusSceneId, setFocusSceneId] = useState<string | null>(null)
   const [activePass, setActivePass] = useState<number | null>(null)
-  const [tab, setTab] = useState('scenes')
+  const [tab, setTab] = useState('mission')
+  const [widened, setWidened] = useState(false)
 
-  // Scenes depend on the whole query; passes only on the area.
+  useEffect(() => {
+    fetchApps()
+      .then(setApps)
+      .catch((e) => toast.error(`Couldn't load the app catalog: ${e.message}`))
+  }, [])
+
+  const app = apps.find((a) => a.id === appId) ?? null
+  const usablePasses = useMemo(() => passes.map((p) => !!app && canRun(app, p)), [app, passes])
+
+  // Reference imagery depends on the whole query; passes only on the area.
   useEffect(() => {
     if (!query) return
     const ctrl = new AbortController()
     setScenesLoading(true)
     setScenesError(null)
-    setActiveSceneId(null)
     searchScenes(query, ctrl.signal)
       .then((r) => {
+        // No clear image in the period (typical right after a storm): look further back for a
+        // clear "before" image, once, and tell the user.
+        if (!r.features.length && !widened) {
+          setWidened(true)
+          setQuery({ ...query, date_from: daysBefore(query.date_to, LOOKBACK_DAYS) })
+          return
+        }
         setScenes(r.features)
         setMatched(r.matched)
+        setActiveSceneId(bestScene(r.features)?.id ?? null)
+        setFocusSceneId(null)
       })
       .catch((e) => {
         if (isAbort(e)) return
         setScenes([])
+        setActiveSceneId(null)
         setScenesError(e.message)
       })
       .finally(() => !ctrl.signal.aborted && setScenesLoading(false))
     return () => ctrl.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `widened` is a one-shot guard
   }, [query])
 
   const bbox = query?.bbox ?? null
@@ -82,14 +125,18 @@ export default function App() {
     return () => ctrl.abort()
   }, [bbox])
 
-  const handleSearch = async (text: string) => {
+  const handleAsk = async (text: string) => {
     setInterpreting(true)
     try {
       const r = await interpret(text)
       setIntent(r.intent)
+      setAppId(r.app_id)
+      setRecommendedId(r.app_id)
+      setAppReason(r.app_reason)
       setWarnings(r.warnings)
+      setWidened(false)
       setQuery(r.query)
-      setTab('scenes')
+      setTab('mission')
     } catch (e) {
       toast.error((e as Error).message)
     } finally {
@@ -103,50 +150,104 @@ export default function App() {
     setQuery({ ...query, bbox: b, place: 'Custom area (map view)' })
   }
 
+  const selectScene = (id: string) => {
+    setTab('imagery')
+    setActiveSceneId(id)
+    setFocusSceneId(id)
+  }
+
   return (
     <div className="flex h-svh flex-col bg-background text-foreground md:flex-row">
-      <aside className="flex min-h-0 flex-1 flex-col border-border md:w-[420px] md:flex-none md:border-r">
+      <aside className="flex min-h-0 flex-1 flex-col border-border md:w-[440px] md:flex-none md:border-r">
         <header className="space-y-3 border-b border-border p-4">
           <div className="flex items-center gap-2">
             <Orbit className="size-5 text-sky-400" />
             <h1 className="font-semibold tracking-tight">Orbit Finder</h1>
-            <span className="text-xs text-muted-foreground">Sentinel-2 · demo</span>
+            <span className="text-xs text-muted-foreground">AI mission store · demo</span>
           </div>
-          <SearchBar loading={interpreting} onSubmit={handleSearch} />
+          <SearchBar loading={interpreting} onSubmit={handleAsk} />
         </header>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           {query ? (
             <>
-              <QueryPanel intent={intent} query={query} warnings={warnings} onChange={setQuery} />
+              <section className="space-y-2">
+                {intent && (
+                  <p className="text-sm text-muted-foreground">
+                    <span className="font-medium text-foreground">Understood: </span>
+                    {intent}
+                  </p>
+                )}
+                <p className="flex items-center gap-1.5 text-sm">
+                  <MapPin className="size-3.5 shrink-0 text-sky-300" />
+                  <span className="truncate">{query.place}</span>
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <CalendarRange className="size-3.5 shrink-0 text-sky-300" />
+                  <Input
+                    type="date"
+                    aria-label="Period start"
+                    value={query.date_from}
+                    max={query.date_to}
+                    onChange={(e) =>
+                      e.target.value && setQuery({ ...query, date_from: e.target.value })
+                    }
+                    className="h-7 text-xs"
+                  />
+                  <span className="text-muted-foreground">→</span>
+                  <Input
+                    type="date"
+                    aria-label="Period end"
+                    value={query.date_to}
+                    min={query.date_from}
+                    max={todayIso()}
+                    onChange={(e) =>
+                      e.target.value && setQuery({ ...query, date_to: e.target.value })
+                    }
+                    className="h-7 text-xs"
+                  />
+                </div>
+                {widened && (
+                  <p className="text-xs text-muted-foreground">
+                    No clear image in that period, so reference imagery now covers the previous{' '}
+                    {LOOKBACK_DAYS} days.
+                  </p>
+                )}
+                {warnings.map((w) => (
+                  <Alert key={w}>
+                    <TriangleAlert />
+                    <AlertDescription>{w}</AlertDescription>
+                  </Alert>
+                ))}
+              </section>
+
+              <AppCard
+                apps={apps}
+                app={app}
+                reason={appReason}
+                recommendedId={recommendedId}
+                onChange={setAppId}
+              />
+
               <Tabs
                 value={tab}
                 onValueChange={(v) => {
                   setTab(String(v))
-                  setActiveSceneId(null)
                   setActivePass(null)
                 }}
               >
                 <TabsList className="w-full">
-                  <TabsTrigger value="scenes">
-                    Archive{!scenesLoading && ` (${scenes.length})`}
+                  <TabsTrigger value="mission">
+                    Opportunities
+                    {!passesLoading && app && ` (${usablePasses.filter(Boolean).length})`}
                   </TabsTrigger>
-                  <TabsTrigger value="passes">
-                    Next passes{!passesLoading && ` (${passes.filter((p) => p.daylight).length})`}
+                  <TabsTrigger value="imagery">
+                    Reference imagery{!scenesLoading && ` (${scenes.length})`}
                   </TabsTrigger>
                 </TabsList>
-                <TabsContent value="scenes" className="pt-2">
-                  <SceneList
-                    scenes={scenes}
-                    matched={matched}
-                    loading={scenesLoading}
-                    error={scenesError}
-                    activeId={activeSceneId}
-                    onSelect={(id) => setActiveSceneId((cur) => (cur === id ? null : id))}
-                  />
-                </TabsContent>
-                <TabsContent value="passes" className="pt-2">
-                  <PassList
+                <TabsContent value="mission" className="pt-2">
+                  <OpportunityList
+                    app={app}
                     passes={passes}
                     loading={passesLoading}
                     error={passesError}
@@ -155,12 +256,28 @@ export default function App() {
                     onSelect={setActivePass}
                   />
                 </TabsContent>
+                <TabsContent value="imagery" className="pt-2">
+                  <SceneList
+                    scenes={scenes}
+                    matched={matched}
+                    loading={scenesLoading}
+                    error={scenesError}
+                    activeId={activeSceneId}
+                    maxCloud={query.max_cloud}
+                    onMaxCloudChange={(v) => setQuery({ ...query, max_cloud: v })}
+                    onSelect={selectScene}
+                  />
+                </TabsContent>
               </Tabs>
             </>
           ) : (
             <Intro />
           )}
         </div>
+
+        <footer className="border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
+          Demo: apps, partners and prices are fictional. Imagery: Copernicus Sentinel-2.
+        </footer>
       </aside>
 
       <main className="order-first h-[45svh] shrink-0 md:order-none md:h-auto md:flex-1">
@@ -168,12 +285,11 @@ export default function App() {
           bbox={bbox}
           scenes={scenes}
           passes={passes}
+          usablePasses={usablePasses}
           activeSceneId={activeSceneId}
+          focusSceneId={focusSceneId}
           activePassIndex={activePass}
-          onSceneClick={(id) => {
-            setTab('scenes')
-            setActiveSceneId(id)
-          }}
+          onSceneClick={selectScene}
           onSearchArea={handleSearchArea}
         />
       </main>
@@ -184,9 +300,10 @@ export default function App() {
 
 function Intro() {
   const steps = [
-    ['Ask', 'Describe what you need in plain language, in English or French.'],
-    ['Check', 'The AI turns it into a structured search you can edit: area, dates, clouds.'],
-    ['Find', 'Browse matching Sentinel-2 images and see when satellites will pass next.'],
+    ['Ask', 'Describe what you need to know, and where, in English or French.'],
+    ['Match', 'The assistant picks the AI app that answers it, from apps that run onboard satellites.'],
+    ['Plan', 'See when a satellite able to run it passes over your area, what you get and when.'],
+    ['Compare', 'Check the latest real Sentinel-2 image of the area, at full resolution.'],
   ]
   return (
     <ol className="space-y-3">

@@ -1,19 +1,20 @@
-"""Natural-language request -> structured imagery search.
+"""Natural-language need -> recommended onboard AI app + area + time window.
 
-The LLM only extracts *intent* (place name, time window, sensor, cloud tolerance). It never
-produces coordinates: the place is geocoded by Nominatim, so the area on the map is real data.
+The LLM only extracts *intent* (place name, time window, which catalog app fits, cloud
+tolerance). It never produces coordinates: the place is geocoded by Nominatim, so the area on the
+map is real data, and it can only pick an app id that exists in the catalog.
 """
 
 import json
 import logging
 import math
 from datetime import date, timedelta
-from typing import Literal
 
 import httpx
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field, ValidationError
 
+from app.catalog import APPS_BY_ID, AppId, catalog_for_prompt
 from app.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -26,15 +27,23 @@ class ExtractedQuery(BaseModel):
         description="Geocodable place name with country, e.g. 'Toulouse, France'. "
         "Null if the request names no place."
     )
+    nearby_town: str | None = Field(
+        description="A town or city inside or next to the place, with country, e.g. "
+        "'Collobrieres, France' for a mountain range. Used if the place itself can't be geocoded."
+    )
     radius_km: float | None = Field(
         description="Only if the user asks for an area around a point ('within 20 km of', "
         "'around'); otherwise null to use the place's own boundaries."
     )
-    date_from: date | None = Field(description="Start of the time window, YYYY-MM-DD.")
-    date_to: date | None = Field(description="End of the time window, YYYY-MM-DD.")
-    sensor: Literal["optical", "radar", "any"] = Field(
-        description="'radar' if the user needs to see through clouds or at night, "
-        "'optical' for true-colour imagery, 'any' if unspecified."
+    date_from: date | None = Field(
+        description="Start of the period of interest (e.g. when the event happened), YYYY-MM-DD."
+    )
+    date_to: date | None = Field(description="End of the period of interest, YYYY-MM-DD.")
+    app_id: AppId | None = Field(
+        description="Id of the catalog app that best answers the need; null if none fits."
+    )
+    app_reason: str = Field(
+        description="One short English sentence: why this app fits, or why none does."
     )
     max_cloud: int | None = Field(
         description="Maximum cloud cover in percent if the user expresses one (e.g. 'clear', "
@@ -43,7 +52,11 @@ class ExtractedQuery(BaseModel):
     intent: str = Field(description="One short English sentence restating the need.")
 
 
-SYSTEM_PROMPT = """You turn requests for satellite imagery into a structured search.
+SYSTEM_PROMPT = """You are the assistant of a marketplace of AI apps that run onboard satellites.
+Turn the user's need into a structured mission request and recommend the catalog app that answers
+it. Catalog:
+{catalog}
+
 Today is {today}. Resolve relative dates ("last week", "this summer") against today.
 "Last week" means the 7 days ending today. Never return dates after today.
 The user may write in any language; `intent` is always in English.
@@ -60,7 +73,9 @@ async def extract(llm: AsyncOpenAI, model: str, text: str, today: date) -> Extra
     messages = [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT.format(today=today.isoformat(), schema=json.dumps(schema)),
+            "content": SYSTEM_PROMPT.format(
+                catalog=catalog_for_prompt(), today=today.isoformat(), schema=json.dumps(schema)
+            ),
         },
         {"role": "user", "content": text},
     ]
@@ -142,6 +157,7 @@ def bbox_around(lat: float, lon: float, radius_km: float) -> list[float]:
 
 DEFAULT_WINDOW_DAYS = 30
 DEFAULT_MAX_CLOUD = 30
+FALLBACK_RADIUS_KM = 25
 MAX_SPAN_DEG = 5  # keep searches regional; a whole country returns thousands of tiles
 
 
@@ -156,11 +172,21 @@ async def interpret(
             "I couldn't find a place in your request. Try naming a city or region."
         )
     geo = await geocode(http, q.place)
+    radius_km = q.radius_km
+    if not geo and q.nearby_town:
+        # Natural areas (ranges, deltas, forests) are often missing from the geocoder.
+        geo = await geocode(http, q.nearby_town)
+        if geo:
+            radius_km = radius_km or FALLBACK_RADIUS_KM
+            warnings.append(
+                f"'{q.place}' isn't in the geocoder: the area is approximated as "
+                f"{radius_km:g} km around {q.nearby_town}. Adjust it on the map if needed."
+            )
     if not geo:
         raise InterpretError(f"I couldn't locate '{q.place}' on the map.")
 
-    if q.radius_km:
-        bbox = bbox_around(geo["lat"], geo["lon"], min(q.radius_km, 250))
+    if radius_km:
+        bbox = bbox_around(geo["lat"], geo["lon"], min(radius_km, 250))
     else:
         bbox = geo["bbox"]
         if bbox[2] - bbox[0] > MAX_SPAN_DEG or bbox[3] - bbox[1] > MAX_SPAN_DEG:
@@ -174,20 +200,21 @@ async def interpret(
     if date_from > date_to:
         date_from, date_to = date_to, date_from
 
-    if q.sensor == "radar":
+    if q.app_id is None:
         warnings.append(
-            "Radar imagery (Sentinel-1) isn't covered by this demo yet: showing optical "
-            "Sentinel-2 results, which clouds can hide."
+            "No app in the catalog answers this need yet: pick one manually, or this would be a "
+            "lead for a new partner app."
         )
 
     return {
         "intent": q.intent,
+        "app_id": q.app_id if q.app_id in APPS_BY_ID else None,
+        "app_reason": q.app_reason,
         "query": {
             "place": geo["display_name"],
             "bbox": bbox,
             "date_from": date_from.isoformat(),
             "date_to": date_to.isoformat(),
-            "sensor": q.sensor,
             "max_cloud": q.max_cloud if q.max_cloud is not None else DEFAULT_MAX_CLOUD,
         },
         "warnings": warnings,

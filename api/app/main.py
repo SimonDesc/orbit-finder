@@ -5,12 +5,13 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from app import orbits, stac
+from app import orbits, stac, tiles
+from app.catalog import CATALOG, App
 from app.config import get_settings
 from app.geo import BBox
 from app.interpret import InterpretError, interpret
@@ -84,6 +85,35 @@ async def interpret_endpoint(
         raise HTTPException(422, str(exc)) from exc
     except httpx.HTTPError as exc:
         raise HTTPException(502, f"Geocoding unavailable: {exc}") from exc
+
+
+@api.get("/apps", summary="Catalog of AI apps that run onboard satellites")
+def apps() -> list[App]:
+    return CATALOG
+
+
+@api.get(
+    "/scenes/{scene_id}/tiles/{z}/{x}/{y}.webp",
+    summary="True-colour map tiles of one Sentinel-2 scene, rendered from its COG",
+    response_class=Response,
+)
+async def scene_tile(scene_id: str, z: int, x: int, y: int, http: Http) -> Response:
+    if not tiles.MIN_ZOOM <= z <= tiles.MAX_ZOOM:
+        raise HTTPException(404, "Zoom level not served")
+    try:
+        url = await tiles.visual_url(http, scene_id)
+    except tiles.SceneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"STAC catalog unavailable: {exc}") from exc
+    try:
+        data = await run_in_threadpool(tiles.render_tile, url, z, x, y)
+    except Exception as exc:  # GDAL/network errors while reading the COG
+        raise HTTPException(502, f"Could not read the scene image: {exc}") from exc
+    headers = {"Cache-Control": "public, max-age=604800, immutable"}  # scenes never change
+    if data is None:
+        return Response(status_code=204, headers=headers)
+    return Response(data, media_type="image/webp", headers=headers)
 
 
 @api.get("/scenes", summary="Sentinel-2 L2A scenes intersecting an area")

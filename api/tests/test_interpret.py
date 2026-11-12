@@ -31,10 +31,12 @@ class FakeLLM:
 def llm_json(**overrides) -> str:
     base = {
         "place": "Toulouse, France",
+        "nearby_town": "Toulouse, France",
         "radius_km": None,
         "date_from": "2026-11-05",
         "date_to": "2026-11-12",
-        "sensor": "optical",
+        "app_id": "flood-mapping",
+        "app_reason": "Flood extent mapping answers a question about flooded fields.",
         "max_cloud": None,
         "intent": "Flooded fields around Toulouse last week.",
     }
@@ -86,7 +88,7 @@ async def test_extract_puts_today_in_prompt_and_parses():
 async def test_extract_retries_once_on_invalid_output():
     llm = FakeLLM("not json at all", "```json\n" + llm_json() + "\n```")
     q = await extract(llm, "m", "Toulouse", TODAY)
-    assert q.sensor == "optical"
+    assert q.app_id == "flood-mapping"
     assert len(llm.calls) == 2
     assert "Invalid JSON" in llm.calls[1]["messages"][-1]["content"]
 
@@ -106,18 +108,20 @@ async def test_interpret_uses_geocoded_bbox_and_defaults():
     assert (q["date_from"], q["date_to"]) == ("2026-11-05", "2026-11-12")
     assert q["max_cloud"] == 30
     assert out["warnings"] == []
+    assert out["app_id"] == "flood-mapping"
 
 
 @pytest.mark.anyio
-async def test_interpret_radius_future_dates_and_radar_warning():
-    llm = FakeLLM(llm_json(radius_km=20, date_from=None, date_to="2027-01-01", sensor="radar"))
+async def test_interpret_radius_future_dates_and_no_matching_app():
+    llm = FakeLLM(llm_json(radius_km=20, date_from=None, date_to="2027-01-01", app_id=None))
     async with nominatim({"Toulouse, France": [TOULOUSE_HIT]}) as http:
         out = await interpret(llm, "m", http, "x", TODAY)
     q = out["query"]
     assert q["date_to"] == "2026-11-12"  # clamped to today
     assert q["date_from"] == "2026-10-13"  # default 30-day window
     assert q["bbox"][3] - q["bbox"][1] == pytest.approx(40 / 111.32, abs=1e-3)
-    assert any("Sentinel-1" in w for w in out["warnings"])
+    assert out["app_id"] is None
+    assert any("No app in the catalog" in w for w in out["warnings"])
 
 
 @pytest.mark.anyio
@@ -160,3 +164,22 @@ def test_endpoint_returns_503_without_key(monkeypatch):
     with TestClient(main.app) as client:
         r = client.post("/api/interpret", json={"text": "Toulouse last week"})
     assert r.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_extract_rejects_app_ids_outside_the_catalog():
+    llm = FakeLLM(llm_json(app_id="made-up-app"), llm_json())
+    q = await extract(llm, "m", "Toulouse", TODAY)
+    assert q.app_id == "flood-mapping"
+    assert len(llm.calls) == 2
+    assert "flood-mapping" in llm.calls[0]["messages"][0]["content"]  # catalog is in the prompt
+
+
+@pytest.mark.anyio
+async def test_interpret_falls_back_to_nearby_town():
+    llm = FakeLLM(llm_json(place="Massif des Maures, France", nearby_town="Toulouse, France"))
+    async with nominatim({"Toulouse, France": [TOULOUSE_HIT]}) as http:
+        out = await interpret(llm, "m", http, "x", TODAY)
+    _, s, _, n = out["query"]["bbox"]
+    assert n - s == pytest.approx(50 / 111.32, abs=1e-3)  # 25 km radius
+    assert any("isn't in the geocoder" in w for w in out["warnings"])

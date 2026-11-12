@@ -5,10 +5,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 const EXAMPLES = [
-  'Flooded fields around Toulouse last week',
-  'Clear images of the port of Marseille in October',
-  'Champs autour de Carcassonne depuis début octobre',
-  'Radar imagery of the Ebro delta this month',
+  'Which fields around Toulouse were flooded after last week’s storm?',
+  'Ships waiting outside the port of Marseille',
+  'Détecter les départs de feu dans le massif des Maures',
+  'Nouvelles constructions autour de Blagnac depuis septembre',
 ]
 
 interface Props {
@@ -34,19 +34,19 @@ export function SearchBar({ loading, onSubmit }: Props) {
         }}
       >
         <div className="relative flex-1">
-          <Sparkles className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Sparkles className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-sky-300" />
           <Input
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Describe the imagery you need…"
-            aria-label="Describe the imagery you need"
+            placeholder="What do you need to know, and where?"
+            aria-label="Describe your need"
             maxLength={500}
             className="h-9 pl-8"
           />
         </div>
         <Button type="submit" size="lg" disabled={loading || text.trim().length < 3}>
           {loading ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
-          <span className="sr-only sm:not-sr-only">Search</span>
+          <span className="sr-only">Ask</span>
         </Button>
       </form>
       <div className="flex flex-wrap gap-1.5">
@@ -59,7 +59,7 @@ export function SearchBar({ loading, onSubmit }: Props) {
               setText(ex)
               submit(ex)
             }}
-            className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
+            className="rounded-full border border-border px-2.5 py-1 text-left text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground disabled:opacity-50"
           >
             {ex}
           </button>
