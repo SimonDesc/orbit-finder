@@ -1,0 +1,27 @@
+[project]
+name = "orbit-finder-api"
+version = "0.1.0"
+description = "Orbit Finder API: natural-language search for satellite imagery and passes"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.5",
+    "httpx>=0.28.1",
+    "openai>=3.49.0",
+    "pydantic-settings>=2.16.2",
+    "pystac-client>=0.9.1",
+    "shapely>=2.2.0",
+    "skyfield>=1.55",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
