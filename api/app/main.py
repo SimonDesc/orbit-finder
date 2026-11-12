@@ -409,6 +409,12 @@ async def satellites(http: Http) -> dict:
 
 app.include_router(api)
 
+# Large files that don't belong in the image or the repo (the demo video), kept on the data
+# volume and served with range requests so browsers can stream and seek.
+_media = settings.data_dir / "media"
+_media.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=_media), name="media")
+
 # In production the Vite build is copied into ./static and served from the same origin.
 if settings.static_dir.is_dir():
     app.mount("/assets", StaticFiles(directory=settings.static_dir / "assets"), name="assets")
