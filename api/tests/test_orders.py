@@ -79,10 +79,10 @@ def test_metering_bills_only_passes_flown_before_cancellation(store):
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(main.settings, "data_dir", tmp_path)
 
-    async def fake_sats(http):
+    async def fake_sats(http, fleet_id="sentinel-2"):
         return []
 
-    def fake_passes(sats, box, start, days):
+    def fake_passes(sats, box, start, days, half_swath_km=0):
         night = {"daylight": False, "time": iso(NOW + timedelta(days=1)), "norad_id": 1}
         day = {"daylight": True, "time": iso(NOW + timedelta(days=2)), "norad_id": 2}
         return [{**night, "satellite": "N"}, {**day, "satellite": "D"}]
@@ -113,3 +113,35 @@ def test_order_api_flow(client):
     cancelled = client.post(f"/api/orders/{order['id']}/cancel", headers=h).json()
     assert cancelled["status"] == "cancelled"
     assert cancelled["usage"]["billed_eur"] == 0
+
+
+def test_quote_volume_discount_and_priority():
+    from app.catalog import APPS_BY_ID
+    from app.pricing import quote
+
+    flood = APPS_BY_ID["flood-mapping"]  # €180 list price
+    assert quote(flood, 1)["total_eur"] == 180
+    assert quote(flood, 5)["unit_price_eur"] == 162  # -10%
+    assert quote(flood, 10)["unit_price_eur"] == 144  # -20%
+    assert quote(flood, 1, "priority")["unit_price_eur"] == 225  # +25%
+
+
+def test_order_books_only_the_selected_passes(client):
+    h = {"X-Demo-Account": CIVIL.id}
+    body = {"app_id": "wildfire-detection", "place": "Maures", "bbox": [6, 43, 6.5, 43.4]}
+    both = client.post("/api/orders", json=body, headers=h).json()
+    assert len(both["passes"]) == 2  # thermal: night and day
+
+    picked = (NOW + timedelta(days=2, seconds=30)).isoformat()  # a few seconds off is the same pass
+    one = client.post(
+        "/api/orders", json={**body, "pass_times": [picked], "priority": "priority"}, headers=h
+    )
+    assert one.status_code == 201
+    assert [p["satellite"] for p in one.json()["passes"]] == ["D"]
+    assert one.json()["usage"]["committed_eur"] == 150  # €120 + 25%
+
+    gone = (NOW + timedelta(days=4)).isoformat()
+    assert (
+        client.post("/api/orders", json={**body, "pass_times": [gone]}, headers=h).status_code
+        == 409
+    )

@@ -56,7 +56,7 @@ def anyio_backend():
 
 @pytest.fixture
 def isolated_cache(monkeypatch, tmp_path):
-    monkeypatch.setattr(orbits, "_cache", None)
+    monkeypatch.setattr(orbits, "_cache", {})
     monkeypatch.setattr(orbits.get_settings(), "data_dir", tmp_path)
     return tmp_path
 
@@ -77,11 +77,11 @@ async def test_tle_fetch_avoids_deflate_persists_and_survives_failures(isolated_
         assert (isolated_cache / "tle_sentinel2.txt").exists()
 
         # Simulated restart: the fresh file on disk is reused, no download.
-        orbits._cache = None
+        orbits._cache.clear()
         assert len(await orbits.get_satellites(http)) == 3
         assert len(seen) == 1
 
-        orbits._cache.fetched_at = 0  # expired: refresh fails, cached set is served
+        orbits._cache["sentinel-2"].fetched_at = 0  # expired: refresh fails, cached set is served
         second = await orbits.get_satellites(http)
 
     assert seen == ["gzip", "gzip"]

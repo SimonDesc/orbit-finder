@@ -10,11 +10,12 @@ import {
   twoline2satrec,
 } from 'satellite.js'
 
-import { fetchSatellites } from './api'
+import { fetchSatellites, type FleetId } from './api'
 
 export interface LiveSat {
   name: string
   norad_id: number
+  fleet: FleetId
   lon: number
   lat: number
   alt_km: number
@@ -50,11 +51,13 @@ function splitAtAntimeridian(points: Position[]): Position[][] {
 }
 
 /**
- * Live positions of the constellation, propagated in the browser with SGP4 from the TLEs the
+ * Live positions of the fleets (Loft's YAMs, Sentinel-2, other Earth observation), propagated in the browser with SGP4 from the TLEs the
  * API serves (same source as pass predictions). Updates every second; tracks every minute.
  */
 export function useLiveSatellites(enabled: boolean) {
-  const [recs, setRecs] = useState<{ name: string; norad_id: number; rec: SatRec }[]>([])
+  const [recs, setRecs] = useState<
+    { name: string; norad_id: number; fleet: FleetId; rec: SatRec }[]
+  >([])
   const [now, setNow] = useState(() => new Date())
   const [error, setError] = useState<string | null>(null)
 
@@ -66,6 +69,7 @@ export function useLiveSatellites(enabled: boolean) {
           r.satellites.map((s) => ({
             name: s.name,
             norad_id: s.norad_id,
+            fleet: s.fleet,
             rec: twoline2satrec(s.line1, s.line2),
           })),
         ),
@@ -81,9 +85,9 @@ export function useLiveSatellites(enabled: boolean) {
 
   const sats = useMemo<LiveSat[]>(
     () =>
-      recs.flatMap(({ name, norad_id, rec }) => {
+      recs.flatMap(({ name, norad_id, fleet, rec }) => {
         const p = subpoint(rec, now)
-        return p ? [{ name, norad_id, ...p }] : []
+        return p ? [{ name, norad_id, fleet, ...p }] : []
       }),
     [recs, now],
   )
@@ -93,7 +97,9 @@ export function useLiveSatellites(enabled: boolean) {
     const start = minute * 60_000
     return {
       type: 'FeatureCollection',
-      features: recs.flatMap(({ name, rec }) => {
+      // Only Loft's fleet: 180 tracks would hide the map.
+      features: recs.flatMap(({ name, fleet, rec }) => {
+        if (fleet !== 'loft') return []
         const pts: Position[] = []
         for (let s = 0; s <= TRACK_AHEAD_MIN * 60; s += TRACK_STEP_S) {
           const p = subpoint(rec, new Date(start + s * 1000))

@@ -42,6 +42,12 @@ async def asset_url(http: httpx.AsyncClient, scene_id: str, asset: str = "visual
     return href
 
 
+def scene_datetime(scene_id: str) -> str:
+    """Acquisition day from the id: S2A_29TNE_20250813_0_L2A -> 2025-08-13T00:00:00Z."""
+    d = scene_id.split("_")[2]
+    return f"{d[:4]}-{d[4:6]}-{d[6:8]}T00:00:00Z"
+
+
 async def visual_url(http: httpx.AsyncClient, scene_id: str) -> str:
     return await asset_url(http, scene_id, "visual")
 

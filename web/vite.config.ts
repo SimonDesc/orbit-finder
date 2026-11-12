@@ -9,7 +9,7 @@ export default defineConfig({
     alias: { '@': path.resolve(__dirname, './src') },
   },
   server: {
-    // FastAPI runs on :8000 in dev; same-origin /api in production.
-    proxy: { '/api': 'http://localhost:8000' },
+    // FastAPI runs on :8000 in dev (API_URL to change it); same-origin /api in production.
+    proxy: { '/api': process.env.API_URL ?? 'http://localhost:8000' },
   },
 })

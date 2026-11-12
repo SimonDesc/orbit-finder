@@ -9,6 +9,20 @@ satellite passes over that area.
 
 > 🚧 Work in progress. Product rationale, architecture and demo will be documented here.
 
+## Demo missions
+
+Three guided missions run end to end (ask → app → Loft passes → result on a real image → order),
+each modelled on a use case Loft Orbital flies:
+
+| Mission | App | Image | Method |
+|---|---|---|---|
+| Ships at anchor off Marseille-Fos | Vessel detection | Latest clear Sentinel-2 image | Bright objects on open sea (NIR), static ones dropped with a second date |
+| Wildfire at Arganil, Portugal | Wildfire detection | 16 Aug 2025 vs 3 Aug | Active flames from SWIR (HOTMAP, Murphy et al. 2016) + burned area (dNBR) |
+| Romagna floods, Italy | Flood mapping | 23 May 2023 vs 3 Apr | MNDWI water, clouds masked; only new water counts as flood |
+
+Passes and orders use the public orbits of Loft's YAM satellites (CelesTrak); the live map also
+shows Sentinel-2 and ~160 other Earth-observation satellites.
+
 ## Stack
 
 - **Web**: React + TypeScript (Vite), shadcn/ui, MapLibre GL

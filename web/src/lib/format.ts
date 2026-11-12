@@ -15,6 +15,8 @@ const utcTime = new Intl.DateTimeFormat('en-GB', {
 const relative = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
 
 export const fmtDateTime = (iso: string) => dateTime.format(new Date(iso))
+const fullDate = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+export const fmtDate = (iso: string) => fullDate.format(new Date(iso))
 export const fmtDay = (iso: string) => dayMonth.format(new Date(iso))
 export const fmtTime = (iso: string) => time.format(new Date(iso))
 export const fmtUtcTime = (iso: string) => `${utcTime.format(new Date(iso))} UTC`

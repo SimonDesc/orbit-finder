@@ -41,6 +41,16 @@ ACCOUNTS = {
             "Port Authority of Marseille",
             ("vessel-detection", "change-detection"),
         ),
+        Account(
+            "fire-service-centro",
+            "Regional Fire Service, Centro (Portugal)",
+            ("wildfire-detection", "change-detection"),
+        ),
+        Account(
+            "civil-protection-romagna",
+            "Civil Protection, Emilia-Romagna",
+            ("flood-mapping", "change-detection"),
+        ),
         Account("agri-coop-occitanie", "Occitanie Farmers' Cooperative", ("crop-health",)),
     )
 }
@@ -80,7 +90,13 @@ class OrderStore:
         return db
 
     def create(
-        self, account: Account, app_id: str, place: str, bbox: list[float], passes: list[dict]
+        self,
+        account: Account,
+        app_id: str,
+        place: str,
+        bbox: list[float],
+        passes: list[dict],
+        unit_price_eur: int | None = None,  # after discount and options; list price if None
     ) -> dict:
         app = APPS_BY_ID.get(app_id)
         if not app:
@@ -103,7 +119,7 @@ class OrderStore:
                     place,
                     json.dumps(bbox),
                     json.dumps(passes),
-                    app.price_eur_per_pass,
+                    app.price_eur_per_pass if unit_price_eur is None else unit_price_eur,
                     now.isoformat(),
                 ),
             )

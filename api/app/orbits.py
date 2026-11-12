@@ -20,6 +20,9 @@ from app.config import get_settings
 from app.geo import BBox, haversine_km, solar_elevation_deg
 
 SENTINEL2_HALF_SWATH_KM = 145  # MSI swath is ~290 km
+# Loft's YAM satellites point their payloads: a target is reachable when it lies within ~25° off
+# nadir, i.e. ~250 km either side of the ground track at 500-600 km altitude.
+LOFT_REACH_KM = 250
 # Ground speed is ~6.8 km/s: a 60 s step puts a sample within ~205 km (along-track) of the true
 # closest approach, which is then refined at 1 s resolution.
 COARSE_STEP_S = 60
@@ -29,8 +32,53 @@ TLE_TTL_S = 6 * 3600  # CelesTrak updates a few times a day and asks clients to 
 log = logging.getLogger(__name__)
 _ts = load.timescale()  # uses skyfield's built-in time data, no download
 
+HERE = Path(__file__).parent
 
-SNAPSHOT_FILE = Path(__file__).parent / "tle_snapshot.txt"  # last-resort fallback, in git
+
+@dataclass(frozen=True)
+class Fleet:
+    """A set of satellites fetched from CelesTrak with one query."""
+
+    id: str
+    label: str
+    query: dict[str, str]
+    cache_name: str
+    snapshot: Path  # last-resort fallback, in git
+
+
+def fleets() -> dict[str, Fleet]:
+    return {
+        f.id: f
+        for f in (
+            # Loft Orbital's own YAM satellites: the apps of the marketplace run onboard them.
+            Fleet(
+                "loft",
+                "Loft Orbital YAM",
+                {"NAME": "YAM-"},
+                "tle_loft.txt",
+                HERE / "tle_snapshot_loft.txt",
+            ),
+            # Public reference imagery (previews, archive search).
+            Fleet(
+                "sentinel-2",
+                "Sentinel-2",
+                {"NAME": get_settings().celestrak_name},
+                "tle_sentinel2.txt",
+                HERE / "tle_snapshot.txt",
+            ),
+            # Context: the rest of the Earth-observation fleet in orbit (CelesTrak "resource").
+            Fleet(
+                "eo",
+                "Other Earth observation",
+                {"GROUP": "resource"},
+                "tle_eo.txt",
+                HERE / "tle_snapshot_eo.txt",
+            ),
+        )
+    }
+
+
+SNAPSHOT_FILE = HERE / "tle_snapshot.txt"
 
 
 @dataclass
@@ -39,7 +87,7 @@ class _TleCache:
     fetched_at: float
 
 
-_cache: _TleCache | None = None
+_cache: dict[str, _TleCache] = {}
 _lock = asyncio.Lock()
 
 
@@ -55,8 +103,8 @@ def parse_tle(text: str) -> list[EarthSatellite]:
     return sats
 
 
-def _cache_file() -> Path:
-    return get_settings().data_dir / "tle_sentinel2.txt"
+def _cache_file(fleet: Fleet) -> Path:
+    return get_settings().data_dir / fleet.cache_name
 
 
 def _load_file(path: Path) -> _TleCache | None:
@@ -67,11 +115,10 @@ def _load_file(path: Path) -> _TleCache | None:
     return _TleCache(sats, path.stat().st_mtime) if sats else None
 
 
-async def _download(http: httpx.AsyncClient) -> str:
-    s = get_settings()
+async def _download(http: httpx.AsyncClient, fleet: Fleet) -> str:
     r = await http.get(
-        s.celestrak_url,
-        params={"NAME": s.celestrak_name, "FORMAT": "TLE"},
+        get_settings().celestrak_url,
+        params={**fleet.query, "FORMAT": "TLE"},
         # CelesTrak answers 500 when "deflate" is offered (httpx's default).
         headers={"Accept-Encoding": "gzip"},
     )
@@ -81,37 +128,39 @@ async def _download(http: httpx.AsyncClient) -> str:
     return r.text
 
 
-async def get_satellites(http: httpx.AsyncClient) -> list[EarthSatellite]:
+async def get_satellites(
+    http: httpx.AsyncClient, fleet_id: str = "sentinel-2"
+) -> list[EarthSatellite]:
     """TLEs from memory, then disk, then CelesTrak; on failure, the freshest copy we have.
 
     CelesTrak blocks clients that download the same data too often (HTTP 403), so the cache is
     kept on disk to survive restarts and the fetch happens at most every TLE_TTL_S.
     """
-    global _cache
+    fleet = fleets()[fleet_id]
     async with _lock:
-        if _cache is None:
-            _cache = _load_file(_cache_file())
-        if _cache and time.time() - _cache.fetched_at < TLE_TTL_S:
-            return _cache.satellites
+        cached = _cache.get(fleet.id) or _load_file(_cache_file(fleet))
+        if cached and time.time() - cached.fetched_at < TLE_TTL_S:
+            _cache[fleet.id] = cached
+            return cached.satellites
         try:
-            text = await _download(http)
+            text = await _download(http, fleet)
         except (httpx.HTTPError, RuntimeError) as exc:
             # TLEs stay usable for days: a stale set beats an error page.
-            fallback = _cache or _load_file(SNAPSHOT_FILE)
+            fallback = cached or _load_file(fleet.snapshot)
             if not fallback:
                 raise
-            log.warning("TLE refresh failed (%s), serving a cached set", exc)
+            log.warning("TLE refresh of %s failed (%s), serving a cached set", fleet.id, exc)
             # Don't retry on every request: back off for an hour.
             fallback.fetched_at = time.time() - TLE_TTL_S + 3600
-            _cache = fallback
+            _cache[fleet.id] = fallback
             return fallback.satellites
         try:
-            _cache_file().parent.mkdir(parents=True, exist_ok=True)
-            _cache_file().write_text(text)
+            _cache_file(fleet).parent.mkdir(parents=True, exist_ok=True)
+            _cache_file(fleet).write_text(text)
         except OSError as exc:
             log.warning("Could not persist TLE cache: %s", exc)
-        _cache = _TleCache(parse_tle(text), time.time())
-        return _cache.satellites
+        _cache[fleet.id] = _TleCache(parse_tle(text), time.time())
+        return _cache[fleet.id].satellites
 
 
 def tle_age_hours(satellites: list[EarthSatellite], now: datetime) -> float:

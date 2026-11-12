@@ -7,6 +7,7 @@ import { type Account, type Order, PREVIEWABLE, type SatApp } from '@/lib/api'
 import { fmtDateTime, fmtDay, fmtRelative, fmtTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
+import { Hint } from './Hint'
 import { Empty } from './SceneList'
 
 interface Props {
@@ -53,13 +54,18 @@ export function MissionsPanel({
 
   return (
     <div className="space-y-3">
-      <div>
-        <h2 className="font-semibold">My missions</h2>
-        <p className="text-xs text-muted-foreground">
-          {account?.name} · licensed for{' '}
-          {account?.licensed_apps.map((id) => apps.find((a) => a.id === id)?.name ?? id).join(', ')}
-        </p>
-      </div>
+      <h2 className="flex items-center gap-1.5 font-semibold">
+        My missions
+        <Hint label="Account and billing">
+          <p>
+            {account?.name} holds licences for{' '}
+            {account?.licensed_apps.map((id) => apps.find((a) => a.id === id)?.name ?? id).join(', ')}.
+          </p>
+          <p className="text-muted-foreground">
+            A booked pass is billed once flown, unless the mission is cancelled before it.
+          </p>
+        </Hint>
+      </h2>
 
       {orders.length > 0 && (
         <div className="grid grid-cols-2 gap-2">
@@ -69,7 +75,7 @@ export function MissionsPanel({
       )}
 
       {!orders.length ? (
-        <Empty>No mission yet. Ask for a need, then “Request this mission”.</Empty>
+        <Empty>No mission yet.</Empty>
       ) : (
         <ul className="grid grid-cols-1 gap-2">
           {orders.map((o) => {
@@ -104,9 +110,13 @@ export function MissionsPanel({
                       }}
                     />
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {u.passes_consumed}/{u.passes_booked} passes used · €{u.billed_eur} billed of €
-                    {u.committed_eur} · €{u.price_eur_per_pass}/pass
+                  <p className="mt-1 flex justify-between text-xs text-muted-foreground tabular-nums">
+                    <span>
+                      {u.passes_consumed}/{u.passes_booked} passes
+                    </span>
+                    <span>
+                      €{u.billed_eur} / €{u.committed_eur}
+                    </span>
                   </p>
                 </div>
 
@@ -114,29 +124,35 @@ export function MissionsPanel({
                   <span className="flex items-center gap-1">
                     <CalendarClock className="size-3.5" />
                     {next
-                      ? `Next: ${fmtDay(next.time)} ${fmtTime(next.time)} (${fmtRelative(next.time)})`
-                      : `Ordered ${fmtDateTime(o.created_at)}`}
+                      ? `${fmtDay(next.time)} ${fmtTime(next.time)} · ${fmtRelative(next.time)}`
+                      : fmtDateTime(o.created_at)}
                   </span>
                   <div className="flex items-center">
                     {PREVIEWABLE.has(o.app_id) && (
-                      <Button variant="ghost" size="xs" onClick={() => onShow(o)}>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => onShow(o)}
+                        aria-label="Show a sample result"
+                        title="Show a sample result"
+                      >
                         <Sparkles />
-                        Sample output
                       </Button>
                     )}
                     {o.status === 'active' && (
                       <Button
                         variant="ghost"
-                        size="xs"
+                        size="icon-xs"
                         disabled={cancelling === o.id}
                         onClick={() => onCancel(o.id)}
+                        aria-label="Cancel the mission"
+                        title="Cancel the mission"
                       >
                         {cancelling === o.id ? (
                           <LoaderCircle className="animate-spin" />
                         ) : (
                           <XCircle />
                         )}
-                        Cancel
                       </Button>
                     )}
                   </div>
@@ -147,10 +163,7 @@ export function MissionsPanel({
         </ul>
       )}
 
-      <p className="text-xs text-muted-foreground">
-        Usage is metered from pass times: a booked pass is billed once flown, unless the mission was
-        cancelled before it.
-      </p>
+
     </div>
   )
 }

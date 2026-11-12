@@ -13,10 +13,12 @@ from pydantic import BaseModel, Field
 from app import analysis, orbits, stac, tiles
 from app.catalog import APPS_BY_ID, CATALOG, App
 from app.config import get_settings
+from app.demos import DEMOS, Demo
 from app.geo import BBox
 from app.interpret import InterpretError, interpret
 from app.llm import get_llm_client
 from app.orders import ACCOUNTS, Account, OrderError, OrderStore
+from app.pricing import Priority, pricing_terms, quote
 from app.ratelimit import RateLimiter
 
 settings = get_settings()
@@ -94,6 +96,11 @@ def apps() -> list[App]:
     return CATALOG
 
 
+@api.get("/demos", summary="End-to-end demo missions modelled on Loft Orbital use cases")
+def demos() -> list[Demo]:
+    return DEMOS
+
+
 @api.get(
     "/scenes/{scene_id}/tiles/{z}/{x}/{y}.webp",
     summary="True-colour map tiles of one Sentinel-2 scene, rendered from its COG",
@@ -124,14 +131,51 @@ PREVIEW_MAX_CLOUD = 15
 
 @api.get(
     "/preview/{app_id}",
-    summary="Run a ground-side preview of an onboard app on the best recent Sentinel-2 image",
+    summary="Run a ground-side preview of an onboard app on a real Sentinel-2 image",
     dependencies=[Depends(RateLimiter(max_calls=12, per_seconds=60))],
 )
-async def app_preview(app_id: str, http: Http, box: Box) -> dict:
+async def app_preview(
+    app_id: str,
+    http: Http,
+    box: Box,
+    scene_id: Annotated[str | None, Query(description="Image to use; default: best recent")] = None,
+    reference_id: Annotated[str | None, Query(description="Image of another date")] = None,
+) -> dict:
     assets = analysis.PREVIEWS.get(app_id)
     if not assets:
         raise HTTPException(404, "No preview available for this app yet")
+    ref_assets = analysis.REFERENCE_BANDS.get(app_id)
     window = analysis.analysis_window(tuple(box.as_list()))
+    props: dict = {}
+    if not scene_id:
+        scene_id, reference_id, props = await _pick_scenes(http, window, app_id)
+
+    async def urls(sid: str, names: tuple[str, ...]) -> tuple[str, ...]:
+        try:
+            return tuple([await tiles.asset_url(http, sid, a) for a in names])
+        except tiles.SceneNotFound as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, f"STAC catalog unavailable: {exc}") from exc
+
+    scene_urls = await urls(scene_id, assets)
+    ref_urls = await urls(reference_id, ref_assets) if reference_id and ref_assets else None
+    try:
+        result = await run_in_threadpool(analysis.run_preview, app_id, scene_urls, window, ref_urls)
+    except analysis.AnalysisError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {
+        "scene_id": scene_id,
+        "datetime": props.get("datetime") or tiles.scene_datetime(scene_id),
+        "cloud_cover": props.get("cloud_cover"),
+        "reference_id": reference_id if ref_urls else None,
+        "reference_datetime": tiles.scene_datetime(reference_id) if ref_urls else None,
+        **result,
+    }
+
+
+async def _pick_scenes(http: httpx.AsyncClient, window, app_id: str):
+    """Best recent image of the window, and a reference of the same tile a week or more apart."""
     today = datetime.now(UTC).date()
     try:
         found = await stac.search_scenes(
@@ -155,41 +199,21 @@ async def app_preview(app_id: str, http: Http, box: Box) -> dict:
             404, f"No clear image of this area in the last {PREVIEW_LOOKBACK_DAYS} days"
         )
     scene = scenes[0]
-    try:
-        urls = tuple([await tiles.asset_url(http, scene["id"], a) for a in assets])
-    except tiles.SceneNotFound as exc:
-        raise HTTPException(404, str(exc)) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(502, f"STAC catalog unavailable: {exc}") from exc
-    # Vessels: a second clear date lets the detector drop rocks and other static objects. Same
-    # tile (identical footprint), at least a week apart so ships at anchor have moved.
-    reference = reference_date = None
+    # Same tile (identical footprint), a week or more apart so ships at anchor have moved;
+    # strictly before for apps that compare with "before" (fire scars, flood).
     when = datetime.fromisoformat(scene["properties"]["datetime"])
-    others = [
-        s
-        for s in scenes[1:]
-        if s["properties"]["tile"] == scene["properties"]["tile"]
-        and abs(datetime.fromisoformat(s["properties"]["datetime"]) - when) >= timedelta(days=7)
-    ]
-    if app_id == "vessel-detection" and others:
-        try:
-            reference = await tiles.asset_url(http, others[0]["id"], "nir")
-        except (tiles.SceneNotFound, httpx.HTTPError):
-            reference = None
-        else:
-            reference_date = others[0]["properties"]["datetime"]
-    try:
-        result = await run_in_threadpool(analysis.run_preview, app_id, urls, window, reference)
-    except analysis.AnalysisError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    props = scene["properties"]
-    return {
-        "scene_id": scene["id"],
-        "datetime": props["datetime"],
-        "cloud_cover": props["cloud_cover"],
-        "reference_datetime": reference_date if reference else None,
-        **result,
-    }
+
+    def fits(s: dict) -> bool:
+        t = datetime.fromisoformat(s["properties"]["datetime"])
+        return (
+            s["properties"]["tile"] == scene["properties"]["tile"]
+            and abs(t - when) >= timedelta(days=7)
+            and (app_id not in analysis.REFERENCE_BEFORE or t < when)
+        )
+
+    others = [s for s in scenes[1:] if fits(s)]
+    reference = others[0]["id"] if others and app_id in analysis.REFERENCE_BANDS else None
+    return scene["id"], reference, scene["properties"]
 
 
 # --- Marketplace: accounts, entitlements, orders, metering ----------------------------------
@@ -226,10 +250,35 @@ class OrderRequest(BaseModel):
     place: str = Field(max_length=200)
     bbox: list[float] = Field(min_length=4, max_length=4)
     days: float = Field(default=5, gt=0, le=10)
+    # Book only these passes (their times, as returned by /passes); all usable ones if omitted.
+    pass_times: list[datetime] | None = Field(default=None, max_length=100)
+    priority: Priority = "standard"
+
+
+# Pass times are refined to the second from a different start time on each call.
+PASS_MATCH_S = 90
+
+
+def _selected(usable: list[dict], times: list[datetime] | None) -> list[dict]:
+    if times is None:
+        return usable
+    return [
+        p
+        for p in usable
+        if any(
+            abs((datetime.fromisoformat(p["time"]) - t).total_seconds()) <= PASS_MATCH_S
+            for t in times
+        )
+    ]
 
 
 def _order_error(exc: OrderError) -> HTTPException:
     return HTTPException(exc.status, str(exc))
+
+
+@api.get("/pricing", summary="Volume tiers and options used to price a mission")
+def pricing() -> dict:
+    return pricing_terms()
 
 
 @api.post(
@@ -248,19 +297,28 @@ async def create_order(body: OrderRequest, account: CurrentAccount, orders: Orde
         raise HTTPException(404, "Unknown app")
     # Passes are recomputed server-side: the client never decides what gets billed.
     try:
-        sats = await orbits.get_satellites(http)
+        sats = await orbits.get_satellites(http, "loft")  # the apps run onboard Loft's YAMs
     except (httpx.HTTPError, RuntimeError) as exc:
         raise HTTPException(502, f"TLE source unavailable: {exc}") from exc
-    found = await run_in_threadpool(orbits.find_passes, sats, box, datetime.now(UTC), body.days)
+    found = await run_in_threadpool(
+        orbits.find_passes, sats, box, datetime.now(UTC), body.days, orbits.LOFT_REACH_KM
+    )
     usable = [
         {"satellite": p["satellite"], "norad_id": p["norad_id"], "time": p["time"]}
         for p in found
         if p["daylight"] or not app_.needs_daylight
     ]
+    chosen = _selected(usable, body.pass_times)
+    if body.pass_times is not None and len(chosen) < len(body.pass_times):
+        raise HTTPException(409, "Some selected passes are no longer available: refresh them.")
+    price = quote(app_, len(chosen), body.priority)
     try:
-        return orders.create(account, body.app_id, body.place, box.as_list(), usable)
+        order = orders.create(
+            account, body.app_id, body.place, box.as_list(), chosen, price["unit_price_eur"]
+        )
     except OrderError as exc:
         raise _order_error(exc) from exc
+    return {**order, "quote": price}
 
 
 @api.get("/orders", summary="Orders of the current account, with usage")
@@ -295,43 +353,57 @@ async def scenes(
         raise HTTPException(502, f"STAC catalog unavailable: {exc}") from exc
 
 
-@api.get("/passes", summary="Next Sentinel-2 passes whose swath can cover the area")
+@api.get("/passes", summary="Next passes of Loft's YAM satellites able to image the area")
 async def passes(
     http: Http,
     box: Box,
-    days: Annotated[float, Query(gt=0, le=10)] = 5,
+    days: Annotated[float, Query(gt=0, le=10)] = 2,
 ) -> dict:
     try:
-        sats = await orbits.get_satellites(http)
+        sats = await orbits.get_satellites(http, "loft")
     except (httpx.HTTPError, RuntimeError) as exc:
         raise HTTPException(502, f"TLE source unavailable: {exc}") from exc
     now = datetime.now(UTC)
-    result = await run_in_threadpool(orbits.find_passes, sats, box, now, days)
+    result = await run_in_threadpool(orbits.find_passes, sats, box, now, days, orbits.LOFT_REACH_KM)
     return {
         "from": now.isoformat(),
         "days": days,
+        "fleet": "Loft Orbital YAM",
+        "satellites": len(sats),
+        "reach_km": orbits.LOFT_REACH_KM,
         "tle_age_hours": orbits.tle_age_hours(sats, now),
         "passes": result,
     }
 
 
-@api.get("/satellites", summary="Current TLEs of the constellation, for live map propagation")
+@api.get("/satellites", summary="Current TLEs of the fleets shown live on the map")
 async def satellites(http: Http) -> dict:
-    try:
-        sats = await orbits.get_satellites(http)
-    except (httpx.HTTPError, RuntimeError) as exc:
-        raise HTTPException(502, f"TLE source unavailable: {exc}") from exc
+    out, seen, ages = [], set(), []
+    for fleet in orbits.fleets().values():  # Loft first: a satellite is listed once
+        try:
+            sats = await orbits.get_satellites(http, fleet.id)
+        except (httpx.HTTPError, RuntimeError):
+            continue  # one fleet missing still leaves a useful map
+        ages.append(orbits.tle_age_hours(sats, datetime.now(UTC)))
+        for s in sats:
+            if s.model.satnum in seen:
+                continue
+            seen.add(s.model.satnum)
+            out.append(
+                {
+                    "name": s.name,
+                    "norad_id": s.model.satnum,
+                    "fleet": fleet.id,
+                    "line1": s.tle_lines[0],
+                    "line2": s.tle_lines[1],
+                }
+            )
+    if not out:
+        raise HTTPException(502, "TLE source unavailable")
     return {
-        "tle_age_hours": orbits.tle_age_hours(sats, datetime.now(UTC)),
-        "satellites": [
-            {
-                "name": s.name,
-                "norad_id": s.model.satnum,
-                "line1": s.tle_lines[0],
-                "line2": s.tle_lines[1],
-            }
-            for s in sats
-        ],
+        "tle_age_hours": max(ages),
+        "fleets": {f.id: f.label for f in orbits.fleets().values()},
+        "satellites": out,
     }
 
 
