@@ -118,6 +118,8 @@ export default function App() {
   const setQuery = (q: SearchQuery) => setMission((m) => (m ? { ...m, query: q } : m))
   const demo = mission?.demo ?? null
   const demoRef = useRef<Demo | null>(null)
+  // Bumped whenever the dashboard is reset: a sample that finishes after that is dropped.
+  const sampleRun = useRef(0)
   demoRef.current = demo
 
   // --- Dashboard data -------------------------------------------------------------------------
@@ -282,6 +284,8 @@ export default function App() {
   }, [mission, app, bbox, passes, passesFor, push])
 
   const clearDashboard = () => {
+    sampleRun.current++
+    setPreviewLoading(false)
     setPreview(null)
     setPreviewError(null)
     setCompare('after')
@@ -456,21 +460,24 @@ export default function App() {
     const d = demoRef.current
     const images =
       d && d.app_id === app.id ? { scene_id: d.scene_id, reference_id: d.reference_id } : {}
+    const run = ++sampleRun.current
     setPreviewLoading(true)
     setPreviewError(null)
     setSampleOpen(true)
     try {
       const p = await runPreview(app.id, bbox, images)
+      if (run !== sampleRun.current) return // the user moved on to another mission
       setPreview(p)
       setPreviewVisible(true)
       setCompare('after')
       push({ role: 'assistant', kind: 'result', date: p.datetime, stats: stats(p) })
     } catch (e) {
+      if (run !== sampleRun.current) return
       setPreview(null)
       setPreviewError((e as Error).message)
       push({ role: 'assistant', kind: 'error', text: (e as Error).message })
     } finally {
-      setPreviewLoading(false)
+      if (run === sampleRun.current) setPreviewLoading(false)
     }
   }, [app, bbox, push])
 
