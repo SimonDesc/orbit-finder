@@ -163,6 +163,8 @@ if settings.static_dir.is_dir():
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str) -> FileResponse:
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Not found")  # unknown API routes must not get the SPA
         root = settings.static_dir.resolve()
         file = (root / path).resolve()
         if path and file.is_relative_to(root) and file.is_file():
