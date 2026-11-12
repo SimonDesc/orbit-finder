@@ -10,6 +10,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -27,6 +28,9 @@ TLE_TTL_S = 6 * 3600  # CelesTrak updates a few times a day and asks clients to 
 
 log = logging.getLogger(__name__)
 _ts = load.timescale()  # uses skyfield's built-in time data, no download
+
+
+SNAPSHOT_FILE = Path(__file__).parent / "tle_snapshot.txt"  # last-resort fallback, in git
 
 
 @dataclass
@@ -49,31 +53,69 @@ def parse_tle(text: str) -> list[EarthSatellite]:
     return sats
 
 
+def _cache_file() -> Path:
+    return get_settings().data_dir / "tle_sentinel2.txt"
+
+
+def _load_file(path: Path) -> _TleCache | None:
+    try:
+        sats = parse_tle(path.read_text())
+    except OSError:
+        return None
+    return _TleCache(sats, path.stat().st_mtime) if sats else None
+
+
+async def _download(http: httpx.AsyncClient) -> str:
+    s = get_settings()
+    r = await http.get(
+        s.celestrak_url,
+        params={"NAME": s.celestrak_name, "FORMAT": "TLE"},
+        # CelesTrak answers 500 when "deflate" is offered (httpx's default).
+        headers={"Accept-Encoding": "gzip"},
+    )
+    r.raise_for_status()
+    if not parse_tle(r.text):
+        raise RuntimeError("CelesTrak returned no TLE")
+    return r.text
+
+
 async def get_satellites(http: httpx.AsyncClient) -> list[EarthSatellite]:
+    """TLEs from memory, then disk, then CelesTrak; on failure, the freshest copy we have.
+
+    CelesTrak blocks clients that download the same data too often (HTTP 403), so the cache is
+    kept on disk to survive restarts and the fetch happens at most every TLE_TTL_S.
+    """
     global _cache
     async with _lock:
+        if _cache is None:
+            _cache = _load_file(_cache_file())
         if _cache and time.time() - _cache.fetched_at < TLE_TTL_S:
             return _cache.satellites
-        s = get_settings()
         try:
-            r = await http.get(
-                s.celestrak_url,
-                params={"NAME": s.celestrak_name, "FORMAT": "TLE"},
-                # CelesTrak answers 500 when "deflate" is offered (httpx's default).
-                headers={"Accept-Encoding": "gzip"},
-            )
-            r.raise_for_status()
-            sats = parse_tle(r.text)
-            if not sats:
-                raise RuntimeError("CelesTrak returned no TLE")
+            text = await _download(http)
         except (httpx.HTTPError, RuntimeError) as exc:
-            # TLEs stay accurate for days: a stale set beats an error page.
-            if _cache:
-                log.warning("TLE refresh failed, serving cached set: %s", exc)
-                return _cache.satellites
-            raise
-        _cache = _TleCache(sats, time.time())
-        return sats
+            # TLEs stay usable for days: a stale set beats an error page.
+            fallback = _cache or _load_file(SNAPSHOT_FILE)
+            if not fallback:
+                raise
+            log.warning("TLE refresh failed (%s), serving a cached set", exc)
+            # Don't retry on every request: back off for an hour.
+            fallback.fetched_at = time.time() - TLE_TTL_S + 3600
+            _cache = fallback
+            return fallback.satellites
+        try:
+            _cache_file().parent.mkdir(parents=True, exist_ok=True)
+            _cache_file().write_text(text)
+        except OSError as exc:
+            log.warning("Could not persist TLE cache: %s", exc)
+        _cache = _TleCache(parse_tle(text), time.time())
+        return _cache.satellites
+
+
+def tle_age_hours(satellites: list[EarthSatellite], now: datetime) -> float:
+    """Age of the oldest orbit element set: the main driver of prediction error."""
+    oldest = min(sat.epoch.utc_datetime() for sat in satellites)
+    return round((now - oldest).total_seconds() / 3600, 1)
 
 
 def _times(start: datetime, seconds: np.ndarray):

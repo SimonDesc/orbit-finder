@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     nominatim_url: str = "https://nominatim.openstreetmap.org/search"
     user_agent: str = "orbit-finder-demo/0.1"
 
+    # Writable directory for caches that should survive restarts (TLEs).
+    data_dir: Path = Path(__file__).resolve().parent.parent / "data"
+
     # Built frontend served by FastAPI in production (single container).
     static_dir: Path = Path(__file__).resolve().parent.parent / "static"
 

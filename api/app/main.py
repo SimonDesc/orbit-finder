@@ -117,7 +117,12 @@ async def passes(
         raise HTTPException(502, f"TLE source unavailable: {exc}") from exc
     now = datetime.now(UTC)
     result = await run_in_threadpool(orbits.find_passes, sats, box, now, days)
-    return {"from": now.isoformat(), "days": days, "passes": result}
+    return {
+        "from": now.isoformat(),
+        "days": days,
+        "tle_age_hours": orbits.tle_age_hours(sats, now),
+        "passes": result,
+    }
 
 
 app.include_router(api)

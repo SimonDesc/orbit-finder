@@ -54,19 +54,48 @@ def anyio_backend():
     return "asyncio"
 
 
-@pytest.mark.anyio
-async def test_tle_fetch_avoids_deflate_and_falls_back_to_cache(monkeypatch):
+@pytest.fixture
+def isolated_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(orbits, "_cache", None)
-    seen = []
+    monkeypatch.setattr(orbits.get_settings(), "data_dir", tmp_path)
+    return tmp_path
 
+
+def celestrak(statuses: list[int], seen: list[str]):
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request.headers["accept-encoding"])
-        return httpx.Response(200 if len(seen) == 1 else 500, text=TLE)
+        return httpx.Response(statuses[len(seen) - 1], text=TLE)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.anyio
+async def test_tle_fetch_avoids_deflate_persists_and_survives_failures(isolated_cache):
+    seen: list[str] = []
+    async with celestrak([200, 403], seen) as http:
         first = await orbits.get_satellites(http)
-        orbits._cache.fetched_at = 0  # force a refresh, which fails
+        assert (isolated_cache / "tle_sentinel2.txt").exists()
+
+        # Simulated restart: the fresh file on disk is reused, no download.
+        orbits._cache = None
+        assert len(await orbits.get_satellites(http)) == 3
+        assert len(seen) == 1
+
+        orbits._cache.fetched_at = 0  # expired: refresh fails, cached set is served
         second = await orbits.get_satellites(http)
 
     assert seen == ["gzip", "gzip"]
-    assert len(first) == 3 and second == first
+    assert [s.name for s in second] == [s.name for s in first]
+
+
+@pytest.mark.anyio
+async def test_tle_falls_back_to_bundled_snapshot(isolated_cache):
+    async with celestrak([403], []) as http:
+        sats = await orbits.get_satellites(http)
+    assert [s.name for s in sats] == ["SENTINEL-2A", "SENTINEL-2B", "SENTINEL-2C"]
+
+
+def test_tle_age_hours():
+    sats = parse_tle(TLE)
+    age = orbits.tle_age_hours(sats, datetime(2026, 11, 13, tzinfo=UTC))
+    assert 30 < age < 40  # oldest epoch is 2026-11-11 15:03 UTC
