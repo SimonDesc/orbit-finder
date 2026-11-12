@@ -1,6 +1,5 @@
 # Orbit Finder
 
-[![CI](https://github.com/SimonDesc/orbit-finder/actions/workflows/ci.yml/badge.svg)](https://github.com/SimonDesc/orbit-finder/actions/workflows/ci.yml)
 
 Describe the satellite imagery you need in plain English — Orbit Finder turns it into a structured
 search (area, time window, sensor), lists matching Sentinel-2 scenes and predicts the next

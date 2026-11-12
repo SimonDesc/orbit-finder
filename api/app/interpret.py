@@ -9,6 +9,7 @@ import json
 import logging
 import math
 from datetime import date, timedelta
+from typing import Literal
 
 import httpx
 from openai import AsyncOpenAI, OpenAIError
@@ -39,6 +40,11 @@ class ExtractedQuery(BaseModel):
         description="Start of the period of interest (e.g. when the event happened), YYYY-MM-DD."
     )
     date_to: date | None = Field(description="End of the period of interest, YYYY-MM-DD.")
+    timeframe: Literal["past", "future", "both"] = Field(
+        description="'past' if the user only asks about something that already happened "
+        "('fires this year', 'last week's flood'), 'future' to monitor or detect from now on, "
+        "'both' if both or unclear."
+    )
     app_id: AppId | None = Field(
         description="Id of the catalog app that best answers the need; null if none fits."
     )
@@ -200,6 +206,13 @@ async def interpret(
     if date_from > date_to:
         date_from, date_to = date_to, date_from
 
+    if q.timeframe == "past":
+        # Onboard apps process new acquisitions: be explicit rather than sell the wrong thing.
+        warnings.append(
+            "Onboard apps analyse new acquisitions, so they can't look back in time. For what "
+            "already happened, archive products fit better (e.g. Copernicus EFFIS burnt areas for "
+            "wildfires, Copernicus EMS maps for floods). Below: how to monitor it from now on."
+        )
     if q.app_id is None:
         warnings.append(
             "No app in the catalog answers this need yet: pick one manually, or this would be a "
@@ -210,6 +223,7 @@ async def interpret(
         "intent": q.intent,
         "app_id": q.app_id if q.app_id in APPS_BY_ID else None,
         "app_reason": q.app_reason,
+        "timeframe": q.timeframe,
         "query": {
             "place": geo["display_name"],
             "bbox": bbox,

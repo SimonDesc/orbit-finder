@@ -8,6 +8,7 @@ import { fmtDateTime, fmtPlatform } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 interface Props {
+  largeArea: boolean
   scenes: Scene[]
   matched: number | null
   loading: boolean
@@ -20,6 +21,7 @@ interface Props {
 
 /** Archive imagery of the area: the "before" picture the app's results are compared with. */
 export function SceneList({
+  largeArea,
   scenes,
   matched,
   loading,
@@ -38,6 +40,12 @@ export function SceneList({
         Latest Sentinel-2 images of the area, as a reference to compare the app's results with.
         The selected image is shown on the map at full 10 m resolution.
       </p>
+      {largeArea && (
+        <p className="rounded-lg border border-amber-300/30 bg-amber-300/5 p-2 text-xs text-amber-100">
+          This area is larger than one image (~110 km). Pick an image below, or zoom in and use
+          “Search this area” for a sharper reference.
+        </p>
+      )}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs text-muted-foreground">
           <span className="flex items-center gap-1">

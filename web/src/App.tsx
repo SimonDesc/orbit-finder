@@ -29,6 +29,10 @@ const LOOKBACK_DAYS = 60
 const daysBefore = (iso: string, days: number) =>
   new Date(new Date(iso).getTime() - days * 86_400_000).toISOString().slice(0, 10)
 
+/** One Sentinel-2 image covers ~110 km: above this span a single reference image is meaningless. */
+const MAX_REFERENCE_SPAN_DEG = 1.5
+const isLargeArea = (b: BBox) => b[2] - b[0] > MAX_REFERENCE_SPAN_DEG || b[3] - b[1] > MAX_REFERENCE_SPAN_DEG
+
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
 
 /** The least cloudy recent image makes the best reference. */
@@ -90,7 +94,7 @@ export default function App() {
         }
         setScenes(r.features)
         setMatched(r.matched)
-        setActiveSceneId(bestScene(r.features)?.id ?? null)
+        setActiveSceneId(isLargeArea(query.bbox) ? null : (bestScene(r.features)?.id ?? null))
         setFocusSceneId(null)
       })
       .catch((e) => {
@@ -258,6 +262,7 @@ export default function App() {
                 </TabsContent>
                 <TabsContent value="imagery" className="pt-2">
                   <SceneList
+                    largeArea={isLargeArea(query.bbox)}
                     scenes={scenes}
                     matched={matched}
                     loading={scenesLoading}

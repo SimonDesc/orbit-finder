@@ -35,6 +35,7 @@ def llm_json(**overrides) -> str:
         "radius_km": None,
         "date_from": "2026-11-05",
         "date_to": "2026-11-12",
+        "timeframe": "both",
         "app_id": "flood-mapping",
         "app_reason": "Flood extent mapping answers a question about flooded fields.",
         "max_cloud": None,
@@ -183,3 +184,11 @@ async def test_interpret_falls_back_to_nearby_town():
     _, s, _, n = out["query"]["bbox"]
     assert n - s == pytest.approx(50 / 111.32, abs=1e-3)  # 25 km radius
     assert any("isn't in the geocoder" in w for w in out["warnings"])
+
+
+@pytest.mark.anyio
+async def test_interpret_explains_past_only_requests():
+    async with nominatim({"Toulouse, France": [TOULOUSE_HIT]}) as http:
+        out = await interpret(FakeLLM(llm_json(timeframe="past")), "m", http, "x", TODAY)
+    assert out["timeframe"] == "past"
+    assert any("can't look back" in w for w in out["warnings"])
