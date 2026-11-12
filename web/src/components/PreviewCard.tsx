@@ -82,6 +82,12 @@ export function PreviewCard({ app, preview, loading, error, visible, onRun, onTo
         )}
       </div>
 
+      {loading && (
+        <p className="text-xs text-muted-foreground">
+          Finding the clearest image, then reading its bands at full resolution from the public
+          archive: up to ~20 s on this small demo server.
+        </p>
+      )}
       {error && !loading && <p className="text-xs text-red-300">{error}</p>}
 
       {current && (
