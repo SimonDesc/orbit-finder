@@ -14,6 +14,7 @@ These are classical remote-sensing baselines, not the partners' models.
 import base64
 import logging
 import math
+from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 import numpy as np
@@ -156,10 +157,14 @@ def run_preview(
     """
     window = analysis_window(bbox)
     size = _grid(window, MAX_PX if app_id == "vessel-detection" else MAX_RASTER_PX)
-    try:
-        bands = [_read(u, window, size) for u in urls]
-    except Exception as exc:  # GDAL / network
-        raise AnalysisError(f"Could not read the image: {exc}") from exc
+    # Reads are network-bound and GDAL releases the GIL: fetch every band at once.
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(_read, u, window, size) for u in urls]
+        ref_future = pool.submit(_read, reference_nir, window, size) if reference_nir else None
+        try:
+            bands = [f.result() for f in futures]
+        except Exception as exc:  # GDAL / network
+            raise AnalysisError(f"Could not read the image: {exc}") from exc
     valid = np.logical_and.reduce([v for _, v in bands])
     coverage = float(valid.mean())
     if coverage < 0.05:
@@ -186,9 +191,9 @@ def run_preview(
         nir, _ = bands[0]
         ships = detect_vessels(nir, valid)
         candidates = len(ships)
-        if reference_nir:
+        if ref_future:
             try:
-                ships = drop_static(ships, *_read(reference_nir, window, size))
+                ships = drop_static(ships, *ref_future.result())
             except (OSError, RuntimeError, ValueError) as exc:  # a bonus: keep raw detections
                 log.warning("Static-object filter skipped: %s", exc)
         ships.sort(key=lambda d: -d["px"])
