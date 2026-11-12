@@ -5,7 +5,9 @@ civil-protection agency describes what it needs to know; Orbit Finder picks the 
 that answers it, shows when one of Loft Orbital's YAM satellites can run it over the area, shows
 what the app delivers on a real Sentinel-2 image, then books, prices and meters the mission.
 
-**Live demo: https://orbit-finder.92.113.26.165.sslip.io** · API docs: [`/docs`](https://orbit-finder.92.113.26.165.sslip.io/docs)
+**Live demo: https://orbit-finder.92.113.26.165.sslip.io** · API docs: [`/docs`](https://orbit-finder.92.113.26.165.sslip.io/docs) · **[Video (1 min 34)](https://orbit-finder.92.113.26.165.sslip.io/media/orbit-finder-demo.mp4)**
+
+[![Orbit Finder demo video: ships at anchor off Marseille-Fos, counted on a real Sentinel-2 image](docs/demo-poster.jpg)](https://orbit-finder.92.113.26.165.sslip.io/media/orbit-finder-demo.mp4)
 
 Built in a few hours as a take-home for the *Full Stack Engineer – AI Marketplace* role at Loft
 Orbital (Toulouse).
