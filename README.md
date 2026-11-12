@@ -7,7 +7,7 @@ what the app delivers on a real Sentinel-2 image, then books, prices and meters 
 
 **Live demo: https://orbit-finder.92.113.26.165.sslip.io** · API docs: [`/docs`](https://orbit-finder.92.113.26.165.sslip.io/docs)
 
-Built in three days as a take-home for the *Full Stack Engineer – AI Marketplace* role at Loft
+Built in a few hours as a take-home for the *Full Stack Engineer – AI Marketplace* role at Loft
 Orbital (Toulouse).
 
 ---
@@ -102,7 +102,7 @@ replay is labelled with its date.
 - **One image, one process.** The Vite build is served by FastAPI from the same container: one
   Dockerfile, one port, no CORS, a health check, a volume for SQLite and the TLE cache.
 
-Known shortcuts, kept on purpose for a three-day scope: demo accounts instead of authentication,
+Known shortcuts, kept on purpose for a few hours of work: demo accounts instead of authentication,
 SQLite instead of a managed database, an in-memory rate limiter and cache (single instance), and
 a first sample that can take ~20 s on the one-CPU demo server (then ~1 s, cached).
 
@@ -195,7 +195,7 @@ port 8000.
 I built this with an AI coding assistant (Claude Code) as a pair: I set the product direction, the
 scope and the trade-offs, reviewed the code and tested every flow; the assistant wrote most of the
 code under that direction. That is how I work day to day, and it is what made a deployed,
-tested, end-to-end product possible in three days.
+tested, end-to-end product possible in a few hours.
 
 ## Data and credits
 
