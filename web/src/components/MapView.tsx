@@ -562,7 +562,7 @@ export function MapView({
         </Button>
       )}
 
-      <div className="absolute bottom-3 left-3 hidden items-center gap-1 rounded-full bg-black/65 p-1 text-xs text-white/90 backdrop-blur md:flex">
+      <div className="absolute bottom-3 left-3 hidden items-center gap-1 rounded-full border border-border bg-background/80 p-1 text-xs text-white/90 backdrop-blur md:flex">
         <button
           type="button"
           onClick={() => setShowLive(!showLive)}

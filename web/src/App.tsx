@@ -23,7 +23,6 @@ import {
   fetchApps,
   fetchDemos,
   fetchPricing,
-  interpret,
   listOrders,
   type Order,
   PASS_DAYS,
@@ -105,7 +104,6 @@ export default function App() {
 
   // --- Conversation -------------------------------------------------------------------------
   const [messages, setMessages] = useState<ChatMsg[]>([])
-  const [thinking, setThinking] = useState(false)
   const nextId = useRef(1)
   const push = useCallback((m: ChatBody) => {
     setMessages((ms) => [...ms, { ...m, id: nextId.current++ } as ChatMsg])
@@ -303,32 +301,6 @@ export default function App() {
     setMission({ ...m, id: nextId.current++, booked: false })
     setRailTab('book')
     push(msg)
-  }
-
-  const handleAsk = async (text: string) => {
-    push({ role: 'user', text })
-    setThinking(true)
-    try {
-      const r = await interpret(text)
-      const a = apps.find((x) => x.id === r.app_id) ?? null
-      begin(
-        { title: text, query: r.query, appId: r.app_id, recommendedId: r.app_id, demo: null },
-        {
-          role: 'assistant',
-          kind: 'mission',
-          intent: r.intent,
-          place: r.query.place,
-          app: a,
-          reason: r.app_reason,
-          warnings: r.warnings,
-          replay: null,
-        },
-      )
-    } catch (e) {
-      push({ role: 'assistant', kind: 'error', text: (e as Error).message })
-    } finally {
-      setThinking(false)
-    }
   }
 
   const startDemo = (d: Demo) => {
@@ -580,11 +552,9 @@ export default function App() {
       <aside className="order-2 flex h-[80svh] flex-col border-border md:order-1 md:h-auto md:w-[360px] md:flex-none md:border-r">
         <ChatPanel
           messages={messages}
-          thinking={thinking}
           replies={replies}
           demos={demos}
           history={history}
-          onSend={handleAsk}
           onDemo={startDemo}
           onNew={newMission}
           onRestore={restore}

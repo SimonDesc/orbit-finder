@@ -1,16 +1,13 @@
 import {
   Anchor,
-  ArrowUp,
   Check,
   Clock,
   Cpu,
   Euro,
   Flame,
   History,
-  LoaderCircle,
   MapPin,
   Moon,
-  Orbit,
   Satellite,
   SquarePen,
   Sun,
@@ -25,6 +22,7 @@ import { fmtDate, fmtDay, fmtRelative, fmtTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { Hint } from './Hint'
+import { Logo } from './Logo'
 
 /** One line of the conversation. Assistant lines are structured: the UI draws them. */
 export type ChatBody =
@@ -100,19 +98,12 @@ function AppIcon({ appId, className }: { appId: string | null; className?: strin
   )
 }
 
-const EXAMPLES = [
-  'Ships at anchor near Fos-sur-Mer',
-  'Départs de feu dans le massif des Maures',
-  'Flooded fields around Toulouse',
-]
 
 interface Props {
   messages: ChatMsg[]
-  thinking: boolean
   replies: QuickReply[]
   demos: Demo[]
   history: PastMission[]
-  onSend: (text: string) => void
   onDemo: (d: Demo) => void
   onNew: () => void
   onRestore: (id: number) => void
@@ -121,36 +112,27 @@ interface Props {
 /** The left column: the customer talks, the assistant answers with structured cards. */
 export function ChatPanel({
   messages,
-  thinking,
   replies,
   demos,
   history,
-  onSend,
   onDemo,
   onNew,
   onRestore,
 }: Props) {
-  const [text, setText] = useState('')
   const [showHistory, setShowHistory] = useState(false)
   const end = useRef<HTMLDivElement>(null)
   const empty = !messages.length
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [messages.length, thinking, replies.length])
-
-  const send = (v: string) => {
-    const t = v.trim()
-    if (t.length < 3 || thinking) return
-    onSend(t)
-    setText('')
-  }
+  }, [messages.length, replies.length])
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex items-center gap-1 border-b border-border px-3 py-2">
-        <Orbit className="size-5 text-sky-400" />
-        <h1 className="font-semibold tracking-tight">Orbit Finder</h1>
+        <h1>
+          <Logo />
+        </h1>
         <div className="relative ml-auto flex items-center gap-1">
           <Button
             size="icon-sm"
@@ -191,17 +173,11 @@ export function ChatPanel({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
         {empty ? (
-          <Welcome demos={demos} onDemo={onDemo} onExample={send} />
+          <Welcome demos={demos} onDemo={onDemo} />
         ) : (
           messages.map((m) => <Message key={m.id} m={m} />)
         )}
-        {thinking && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle className="size-4 animate-spin" />
-            Working on it…
-          </div>
-        )}
-        {!thinking && replies.length > 0 && (
+        {replies.length > 0 && (
           <div className="flex flex-wrap gap-1.5 pt-1">
             {replies.map((r) => (
               <Button
@@ -219,58 +195,19 @@ export function ChatPanel({
         <div ref={end} />
       </div>
 
-      <form
-        className="border-t border-border p-3"
-        onSubmit={(e) => {
-          e.preventDefault()
-          send(text)
-        }}
-      >
-        <div className="flex items-end gap-2 rounded-xl border border-border bg-muted/30 p-1.5 focus-within:border-sky-400/50">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                send(text)
-              }
-            }}
-            rows={1}
-            maxLength={500}
-            placeholder={empty ? 'What do you need to know, and where?' : 'Ask about another place…'}
-            aria-label="Describe your need"
-            className="max-h-32 min-h-8 flex-1 resize-none bg-transparent px-1.5 py-1 text-sm outline-none placeholder:text-muted-foreground"
-          />
-          <Button
-            type="submit"
-            size="icon-sm"
-            disabled={thinking || text.trim().length < 3}
-            aria-label="Send"
-          >
-            <ArrowUp />
-          </Button>
-        </div>
-      </form>
     </div>
   )
 }
 
-function Welcome({
-  demos,
-  onDemo,
-  onExample,
-}: {
-  demos: Demo[]
-  onDemo: (d: Demo) => void
-  onExample: (t: string) => void
-}) {
+function Welcome({ demos, onDemo }: { demos: Demo[]; onDemo: (d: Demo) => void }) {
   return (
     <div className="space-y-5 pt-2">
       <div>
-        <p className="text-lg font-semibold">What should a satellite watch for you?</p>
-        <p className="text-sm text-muted-foreground">
-          Describe a need; I find the onboard AI app, the passes and the price.
+        <p className="font-heading text-xl leading-tight font-semibold tracking-tight">
+          What should a satellite watch for you?
+        </p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Pick a mission: I find the onboard AI app, the passes and the price.
         </p>
       </div>
       <section className="space-y-1.5">
@@ -293,23 +230,6 @@ function Welcome({
             </span>
           </button>
         ))}
-      </section>
-      <section className="space-y-1.5">
-        <h2 className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-          Or try
-        </h2>
-        <div className="flex flex-wrap gap-1.5">
-          {EXAMPLES.map((ex) => (
-            <button
-              key={ex}
-              type="button"
-              onClick={() => onExample(ex)}
-              className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-            >
-              {ex}
-            </button>
-          ))}
-        </div>
       </section>
     </div>
   )
