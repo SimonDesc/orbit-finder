@@ -78,9 +78,6 @@ def fleets() -> dict[str, Fleet]:
     }
 
 
-SNAPSHOT_FILE = HERE / "tle_snapshot.txt"
-
-
 @dataclass
 class _TleCache:
     satellites: list[EarthSatellite]

@@ -23,14 +23,6 @@ export interface SearchQuery {
   max_cloud: number
 }
 
-export interface InterpretResponse {
-  intent: string
-  app_id: string | null
-  app_reason: string
-  query: SearchQuery
-  warnings: string[]
-}
-
 export interface SceneProps {
   datetime: string
   platform: string | null
@@ -98,15 +90,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const fetchApps = () => request<SatApp[]>('/api/apps')
-
-export function interpret(text: string, signal?: AbortSignal) {
-  return request<InterpretResponse>('/api/interpret', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-    signal,
-  })
-}
 
 const bboxParam = (b: BBox) => b.map((v) => v.toFixed(5)).join(',')
 
