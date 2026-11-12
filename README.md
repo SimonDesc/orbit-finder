@@ -4,6 +4,8 @@ Describe the satellite imagery you need in plain English — Orbit Finder turns 
 search (area, time window, sensor), lists matching Sentinel-2 scenes and predicts the next
 satellite passes over that area.
 
+**Live demo: https://orbit-finder.92.113.26.165.sslip.io**
+
 > 🚧 Work in progress. Product rationale, architecture and demo will be documented here.
 
 ## Stack
