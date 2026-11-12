@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     stac_url: str = "https://earth-search.aws.element84.com/v1"
     stac_collection: str = "sentinel-2-l2a"
     celestrak_url: str = "https://celestrak.org/NORAD/elements/gp.php"
+    celestrak_name: str = "SENTINEL-2"  # matches Sentinel-2A/2B/2C
     nominatim_url: str = "https://nominatim.openstreetmap.org/search"
     user_agent: str = "orbit-finder-demo/0.1"
 

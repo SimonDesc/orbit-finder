@@ -8,7 +8,6 @@ dependencies = [
     "httpx>=0.28.1",
     "openai>=3.49.0",
     "pydantic-settings>=2.16.2",
-    "pystac-client>=0.9.1",
     "shapely>=2.2.0",
     "skyfield>=1.55",
     "uvicorn[standard]>=0.54.0",
