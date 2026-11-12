@@ -9,3 +9,4 @@ api/static/
 *.log
 api/data/
 .claude/
+.coolify-token
