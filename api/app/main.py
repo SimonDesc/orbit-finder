@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -11,11 +11,12 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from app import orbits, stac, tiles
-from app.catalog import CATALOG, App
+from app.catalog import APPS_BY_ID, CATALOG, App
 from app.config import get_settings
 from app.geo import BBox
 from app.interpret import InterpretError, interpret
 from app.llm import get_llm_client
+from app.orders import ACCOUNTS, Account, OrderError, OrderStore
 from app.ratelimit import RateLimiter
 
 settings = get_settings()
@@ -25,6 +26,7 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     async with httpx.AsyncClient(timeout=20, headers={"User-Agent": settings.user_agent}) as client:
         app.state.http = client
+        app.state.orders = OrderStore(settings.data_dir / "orbit.db")
         yield
 
 
@@ -114,6 +116,90 @@ async def scene_tile(scene_id: str, z: int, x: int, y: int, http: Http) -> Respo
     if data is None:
         return Response(status_code=204, headers=headers)
     return Response(data, media_type="image/webp", headers=headers)
+
+
+# --- Marketplace: accounts, entitlements, orders, metering ----------------------------------
+
+
+def current_account(
+    x_demo_account: Annotated[str | None, Header(description="Demo tenant id")] = None,
+) -> Account:
+    """Demo stand-in for authentication: production would read the tenant from an OIDC token."""
+    account = ACCOUNTS.get(x_demo_account or "")
+    if not account:
+        raise HTTPException(401, "Unknown or missing account")
+    return account
+
+
+def order_store(request: Request) -> OrderStore:
+    return request.app.state.orders
+
+
+CurrentAccount = Annotated[Account, Depends(current_account)]
+Orders = Annotated[OrderStore, Depends(order_store)]
+
+
+@api.get("/accounts", summary="Demo accounts and the apps each one is licensed for")
+def accounts() -> list[dict]:
+    return [
+        {"id": a.id, "name": a.name, "licensed_apps": list(a.licensed_apps)}
+        for a in ACCOUNTS.values()
+    ]
+
+
+class OrderRequest(BaseModel):
+    app_id: str
+    place: str = Field(max_length=200)
+    bbox: list[float] = Field(min_length=4, max_length=4)
+    days: float = Field(default=5, gt=0, le=10)
+
+
+def _order_error(exc: OrderError) -> HTTPException:
+    return HTTPException(exc.status, str(exc))
+
+
+@api.post(
+    "/orders",
+    status_code=201,
+    summary="Order a monitoring mission: books the next passes able to run the app",
+    dependencies=[Depends(RateLimiter(max_calls=20, per_seconds=60))],
+)
+async def create_order(body: OrderRequest, account: CurrentAccount, orders: Orders, http: Http):
+    try:
+        box = BBox.parse(",".join(map(str, body.bbox)))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    app_ = APPS_BY_ID.get(body.app_id)
+    if not app_:
+        raise HTTPException(404, "Unknown app")
+    # Passes are recomputed server-side: the client never decides what gets billed.
+    try:
+        sats = await orbits.get_satellites(http)
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(502, f"TLE source unavailable: {exc}") from exc
+    found = await run_in_threadpool(orbits.find_passes, sats, box, datetime.now(UTC), body.days)
+    usable = [
+        {"satellite": p["satellite"], "norad_id": p["norad_id"], "time": p["time"]}
+        for p in found
+        if p["daylight"] or not app_.needs_daylight
+    ]
+    try:
+        return orders.create(account, body.app_id, body.place, box.as_list(), usable)
+    except OrderError as exc:
+        raise _order_error(exc) from exc
+
+
+@api.get("/orders", summary="Orders of the current account, with usage")
+def list_orders(account: CurrentAccount, orders: Orders) -> list[dict]:
+    return orders.list(account)
+
+
+@api.post("/orders/{order_id}/cancel", summary="Cancel an order; past passes stay billed")
+def cancel_order(order_id: str, account: CurrentAccount, orders: Orders) -> dict:
+    try:
+        return orders.cancel(account, order_id)
+    except OrderError as exc:
+        raise _order_error(exc) from exc
 
 
 @api.get("/scenes", summary="Sentinel-2 L2A scenes intersecting an area")

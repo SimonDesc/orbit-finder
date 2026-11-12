@@ -1,27 +1,36 @@
-import { CalendarRange, MapPin, Orbit, TriangleAlert } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { CalendarRange, ClipboardList, MapPin, Orbit, TriangleAlert } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import { AppCard } from '@/components/AppCard'
 import { MapView } from '@/components/MapView'
+import { MissionsPanel } from '@/components/MissionsPanel'
 import { OpportunityList } from '@/components/OpportunityList'
 import { SceneList } from '@/components/SceneList'
 import { SearchBar } from '@/components/SearchBar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Toaster } from '@/components/ui/sonner'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
+  type Account,
   type BBox,
   canRun,
+  cancelOrder,
+  createOrder,
+  fetchAccounts,
   fetchApps,
   interpret,
+  listOrders,
+  type Order,
   type Pass,
   predictPasses,
   type SatApp,
   type Scene,
   type SearchQuery,
   searchScenes,
+  setCurrentAccount,
 } from '@/lib/api'
 import { todayIso } from '@/lib/format'
 
@@ -32,6 +41,20 @@ const daysBefore = (iso: string, days: number) =>
 /** One Sentinel-2 image covers ~110 km: above this span a single reference image is meaningless. */
 const MAX_REFERENCE_SPAN_DEG = 1.5
 const isLargeArea = (b: BBox) => b[2] - b[0] > MAX_REFERENCE_SPAN_DEG || b[3] - b[1] > MAX_REFERENCE_SPAN_DEG
+
+const ACCOUNT_KEY = 'orbit-finder-account'
+const DEFAULT_ACCOUNT = 'civil-protection-sud'
+
+function initialAccount() {
+  let id = DEFAULT_ACCOUNT
+  try {
+    id = localStorage.getItem(ACCOUNT_KEY) ?? DEFAULT_ACCOUNT
+  } catch {
+    /* storage unavailable: keep the default */
+  }
+  setCurrentAccount(id)
+  return id
+}
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
 
@@ -68,11 +91,48 @@ export default function App() {
   const [tab, setTab] = useState('mission')
   const [widened, setWidened] = useState(false)
 
+  const [accounts, setAccounts] = useState<Account[]>([])
+  const [accountId, setAccountId] = useState(initialAccount)
+  const [view, setView] = useState<'explore' | 'missions'>('explore')
+  const [orders, setOrders] = useState<Order[]>([])
+  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [ordersError, setOrdersError] = useState<string | null>(null)
+  const [ordering, setOrdering] = useState(false)
+  const [cancelling, setCancelling] = useState<string | null>(null)
+
   useEffect(() => {
     fetchApps()
       .then(setApps)
       .catch((e) => toast.error(`Couldn't load the app catalog: ${e.message}`))
+    fetchAccounts()
+      .then(setAccounts)
+      .catch(() => setAccounts([]))
   }, [])
+
+  const loadOrders = useCallback(() => {
+    setOrdersLoading(true)
+    setOrdersError(null)
+    return listOrders()
+      .then(setOrders)
+      .catch((e) => setOrdersError(e.message))
+      .finally(() => setOrdersLoading(false))
+  }, [])
+
+  useEffect(() => {
+    loadOrders()
+  }, [accountId, loadOrders])
+
+  const account = accounts.find((a) => a.id === accountId) ?? null
+
+  const switchAccount = (id: string) => {
+    setCurrentAccount(id)
+    setAccountId(id)
+    try {
+      localStorage.setItem(ACCOUNT_KEY, id)
+    } catch {
+      /* not persisted: fine */
+    }
+  }
 
   const app = apps.find((a) => a.id === appId) ?? null
   const usablePasses = useMemo(() => passes.map((p) => !!app && canRun(app, p)), [app, passes])
@@ -154,6 +214,53 @@ export default function App() {
     setQuery({ ...query, bbox: b, place: 'Custom area (map view)' })
   }
 
+  const handleRequest = async () => {
+    if (!query || !app) return
+    setOrdering(true)
+    try {
+      const order = await createOrder({ app_id: app.id, place: query.place, bbox: query.bbox })
+      toast.success(`Mission booked: ${app.name}`, {
+        description: `${order.usage.passes_booked} passes reserved · €${order.usage.committed_eur} committed`,
+      })
+      await loadOrders()
+      setView('missions')
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setOrdering(false)
+    }
+  }
+
+  const handleCancel = async (id: string) => {
+    setCancelling(id)
+    try {
+      await cancelOrder(id)
+      await loadOrders()
+    } catch (e) {
+      toast.error((e as Error).message)
+    } finally {
+      setCancelling(null)
+    }
+  }
+
+  const showOrder = (o: Order) => {
+    const today = todayIso()
+    setAppId(o.app_id)
+    setRecommendedId(null)
+    setIntent(null)
+    setWarnings([])
+    setWidened(false)
+    setQuery({
+      place: o.place,
+      bbox: o.bbox,
+      date_from: query?.date_from ?? daysBefore(today, 30),
+      date_to: query?.date_to ?? today,
+      max_cloud: query?.max_cloud ?? 30,
+    })
+    setTab('mission')
+    setView('explore')
+  }
+
   const selectScene = (id: string) => {
     setTab('imagery')
     setActiveSceneId(id)
@@ -169,11 +276,44 @@ export default function App() {
             <h1 className="font-semibold tracking-tight">Orbit Finder</h1>
             <span className="text-xs text-muted-foreground">AI mission store · demo</span>
           </div>
+          <div className="flex items-center gap-2">
+            <select
+              aria-label="Demo account"
+              value={accountId}
+              onChange={(e) => switchAccount(e.target.value)}
+              className="h-7 min-w-0 flex-1 truncate rounded-md border border-border bg-background px-1.5 text-xs"
+            >
+              {(accounts.length ? accounts : [{ id: accountId, name: accountId }]).map((a) => (
+                <option key={a.id} value={a.id}>
+                  Signed in as: {a.name}
+                </option>
+              ))}
+            </select>
+            <Button
+              size="sm"
+              variant={view === 'missions' ? 'default' : 'outline'}
+              onClick={() => setView(view === 'missions' ? 'explore' : 'missions')}
+            >
+              <ClipboardList />
+              My missions{orders.length > 0 && ` (${orders.length})`}
+            </Button>
+          </div>
           <SearchBar loading={interpreting} onSubmit={handleAsk} />
         </header>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-          {query ? (
+          {view === 'missions' ? (
+            <MissionsPanel
+              account={account}
+              apps={apps}
+              orders={orders}
+              loading={ordersLoading && !orders.length}
+              error={ordersError}
+              cancelling={cancelling}
+              onCancel={handleCancel}
+              onShow={showOrder}
+            />
+          ) : query ? (
             <>
               <section className="space-y-2">
                 {intent && (
@@ -258,6 +398,9 @@ export default function App() {
                     tleAgeHours={tleAge}
                     activeIndex={activePass}
                     onSelect={setActivePass}
+                    licensed={!!app && !!account?.licensed_apps.includes(app.id)}
+                    ordering={ordering}
+                    onRequest={handleRequest}
                   />
                 </TabsContent>
                 <TabsContent value="imagery" className="pt-2">

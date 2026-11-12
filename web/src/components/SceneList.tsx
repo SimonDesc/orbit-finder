@@ -84,7 +84,7 @@ export function SceneList({
               ? `${scenes.length} most recent of ${matched} images`
               : `${scenes.length} image${scenes.length > 1 ? 's' : ''}, most recent first`}
           </p>
-          <ul className="grid gap-1.5">
+          <ul className="grid grid-cols-1 gap-1.5">
             {scenes.map((s) => {
               const p = s.properties
               const active = s.id === activeId

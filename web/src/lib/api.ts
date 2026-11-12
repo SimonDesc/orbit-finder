@@ -126,3 +126,60 @@ export const sceneTilesUrl = (sceneId: string) =>
 
 /** A pass can run the app if the sensor works at that time (optical needs daylight). */
 export const canRun = (app: SatApp, pass: Pass) => !app.needs_daylight || pass.daylight
+
+// --- Marketplace: demo accounts, orders, usage ---------------------------------------------
+
+export interface Account {
+  id: string
+  name: string
+  licensed_apps: string[]
+}
+
+export interface OrderPass {
+  satellite: string
+  norad_id: number
+  time: string
+  state: 'scheduled' | 'consumed' | 'cancelled'
+}
+
+export interface Order {
+  id: string
+  app_id: string
+  place: string
+  bbox: BBox
+  created_at: string
+  cancelled_at: string | null
+  status: 'active' | 'completed' | 'cancelled'
+  passes: OrderPass[]
+  usage: {
+    passes_booked: number
+    passes_consumed: number
+    passes_remaining: number
+    price_eur_per_pass: number
+    billed_eur: number
+    committed_eur: number
+  }
+}
+
+// Demo stand-in for auth: the selected tenant travels in a header (an OIDC token in production).
+let currentAccountId: string | null = null
+export const setCurrentAccount = (id: string) => {
+  currentAccountId = id
+}
+const accountHeaders = (): HeadersInit =>
+  currentAccountId ? { 'X-Demo-Account': currentAccountId } : {}
+
+export const fetchAccounts = () => request<Account[]>('/api/accounts')
+
+export const listOrders = () => request<Order[]>('/api/orders', { headers: accountHeaders() })
+
+export function createOrder(body: { app_id: string; place: string; bbox: BBox; days?: number }) {
+  return request<Order>('/api/orders', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...accountHeaders() },
+    body: JSON.stringify(body),
+  })
+}
+
+export const cancelOrder = (id: string) =>
+  request<Order>(`/api/orders/${id}/cancel`, { method: 'POST', headers: accountHeaders() })

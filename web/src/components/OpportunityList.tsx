@@ -1,5 +1,4 @@
-import { Moon, Satellite, Send, Sun } from 'lucide-react'
-import { toast } from 'sonner'
+import { LoaderCircle, Lock, Moon, Satellite, Send, Sun } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -17,6 +16,9 @@ interface Props {
   tleAgeHours: number | null
   activeIndex: number | null
   onSelect: (i: number | null) => void
+  licensed: boolean
+  ordering: boolean
+  onRequest: () => void
 }
 
 const addMinutes = (iso: string, min: number) =>
@@ -31,6 +33,9 @@ export function OpportunityList({
   tleAgeHours,
   activeIndex,
   onSelect,
+  licensed,
+  ordering,
+  onRequest,
 }: Props) {
   if (loading) {
     return (
@@ -48,13 +53,6 @@ export function OpportunityList({
   const usable = passes.filter((p) => canRun(app, p))
   const next = usable[0]
 
-  const requestMission = () =>
-    toast.success(`Demo: mission request for ${app.name} prepared`, {
-      description:
-        'In production this would check the customer’s entitlement, schedule the app on the ' +
-        'satellite, meter usage and bill the partner’s price.',
-    })
-
   return (
     <div className="space-y-3">
       {next ? (
@@ -71,10 +69,18 @@ export function OpportunityList({
             {usable.length} usable pass{usable.length > 1 ? 'es' : ''} in 5 days · €
             {usable.length * app.price_eur_per_pass} to monitor them all
           </p>
-          <Button className="mt-2.5 w-full" onClick={requestMission}>
-            <Send />
-            Request this mission
-          </Button>
+          {licensed ? (
+            <Button className="mt-2.5 w-full" onClick={onRequest} disabled={ordering}>
+              {ordering ? <LoaderCircle className="animate-spin" /> : <Send />}
+              Request this mission · €{usable.length * app.price_eur_per_pass}
+            </Button>
+          ) : (
+            <p className="mt-2.5 flex items-center gap-1.5 rounded-md border border-border bg-background/60 p-2 text-xs text-muted-foreground">
+              <Lock className="size-3.5 shrink-0" />
+              Your organisation has no licence for {app.name}. Switch account or request access
+              from the partner.
+            </p>
+          )}
         </div>
       ) : (
         <Empty>
@@ -82,7 +88,7 @@ export function OpportunityList({
         </Empty>
       )}
 
-      <ol className="grid gap-1.5">
+      <ol className="grid grid-cols-1 gap-1.5">
         {passes.map((p, i) => {
           const ok = canRun(app, p)
           const active = i === activeIndex
