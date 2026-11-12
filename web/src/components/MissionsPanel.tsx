@@ -1,9 +1,9 @@
-import { CalendarClock, LoaderCircle, MapPin, XCircle } from 'lucide-react'
+import { CalendarClock, LoaderCircle, MapPin, Sparkles, XCircle } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { Account, Order, SatApp } from '@/lib/api'
+import { type Account, type Order, PREVIEWABLE, type SatApp } from '@/lib/api'
 import { fmtDateTime, fmtDay, fmtRelative, fmtTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -99,7 +99,9 @@ export function MissionsPanel({
                   <div className="flex h-1.5 overflow-hidden rounded-full bg-muted">
                     <div
                       className="bg-amber-300"
-                      style={{ width: `${(u.passes_consumed / u.passes_booked) * 100}%` }}
+                      style={{
+                        width: `${(u.passes_consumed / u.passes_booked) * 100}%`,
+                      }}
                     />
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
@@ -115,17 +117,29 @@ export function MissionsPanel({
                       ? `Next: ${fmtDay(next.time)} ${fmtTime(next.time)} (${fmtRelative(next.time)})`
                       : `Ordered ${fmtDateTime(o.created_at)}`}
                   </span>
-                  {o.status === 'active' && (
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      disabled={cancelling === o.id}
-                      onClick={() => onCancel(o.id)}
-                    >
-                      {cancelling === o.id ? <LoaderCircle className="animate-spin" /> : <XCircle />}
-                      Cancel
-                    </Button>
-                  )}
+                  <div className="flex items-center">
+                    {PREVIEWABLE.has(o.app_id) && (
+                      <Button variant="ghost" size="xs" onClick={() => onShow(o)}>
+                        <Sparkles />
+                        Sample output
+                      </Button>
+                    )}
+                    {o.status === 'active' && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={cancelling === o.id}
+                        onClick={() => onCancel(o.id)}
+                      >
+                        {cancelling === o.id ? (
+                          <LoaderCircle className="animate-spin" />
+                        ) : (
+                          <XCircle />
+                        )}
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </li>
             )
@@ -134,8 +148,8 @@ export function MissionsPanel({
       )}
 
       <p className="text-xs text-muted-foreground">
-        Usage is metered from pass times: a booked pass is billed once flown, unless the mission
-        was cancelled before it.
+        Usage is metered from pass times: a booked pass is billed once flown, unless the mission was
+        cancelled before it.
       </p>
     </div>
   )

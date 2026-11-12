@@ -6,6 +6,7 @@ import { AppCard } from '@/components/AppCard'
 import { MapView } from '@/components/MapView'
 import { MissionsPanel } from '@/components/MissionsPanel'
 import { OpportunityList } from '@/components/OpportunityList'
+import { PreviewCard } from '@/components/PreviewCard'
 import { SceneList } from '@/components/SceneList'
 import { SearchBar } from '@/components/SearchBar'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -26,6 +27,9 @@ import {
   type Order,
   type Pass,
   predictPasses,
+  PREVIEWABLE,
+  type Preview,
+  runPreview,
   type SatApp,
   type Scene,
   type SearchQuery,
@@ -40,7 +44,8 @@ const daysBefore = (iso: string, days: number) =>
 
 /** One Sentinel-2 image covers ~110 km: above this span a single reference image is meaningless. */
 const MAX_REFERENCE_SPAN_DEG = 1.5
-const isLargeArea = (b: BBox) => b[2] - b[0] > MAX_REFERENCE_SPAN_DEG || b[3] - b[1] > MAX_REFERENCE_SPAN_DEG
+const isLargeArea = (b: BBox) =>
+  b[2] - b[0] > MAX_REFERENCE_SPAN_DEG || b[3] - b[1] > MAX_REFERENCE_SPAN_DEG
 
 const ACCOUNT_KEY = 'orbit-finder-account'
 const DEFAULT_ACCOUNT = 'civil-protection-sud'
@@ -58,11 +63,15 @@ function initialAccount() {
 
 const isAbort = (e: unknown) => e instanceof DOMException && e.name === 'AbortError'
 
-/** The least cloudy recent image makes the best reference. */
+/**
+ * The best reference covers the whole area (tile and swath edges often cut it), then is the least
+ * cloudy. Coverage is compared in 10% steps so a clear image beats a marginally larger one.
+ */
+const sceneScore = (s: Scene) =>
+  Math.round((s.properties.coverage ?? 0) * 10) * 1000 - (s.properties.cloud_cover ?? 100)
 const bestScene = (scenes: Scene[]) =>
   scenes.reduce<Scene | null>(
-    (best, s) =>
-      !best || (s.properties.cloud_cover ?? 100) < (best.properties.cloud_cover ?? 100) ? s : best,
+    (best, s) => (!best || sceneScore(s) > sceneScore(best) ? s : best),
     null,
   )
 
@@ -99,6 +108,12 @@ export default function App() {
   const [ordersError, setOrdersError] = useState<string | null>(null)
   const [ordering, setOrdering] = useState(false)
   const [cancelling, setCancelling] = useState<string | null>(null)
+
+  const [preview, setPreview] = useState<Preview | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewVisible, setPreviewVisible] = useState(true)
+  const [autoPreview, setAutoPreview] = useState(false)
 
   useEffect(() => {
     fetchApps()
@@ -149,7 +164,10 @@ export default function App() {
         // clear "before" image, once, and tell the user.
         if (!r.features.length && !widened) {
           setWidened(true)
-          setQuery({ ...query, date_from: daysBefore(query.date_to, LOOKBACK_DAYS) })
+          setQuery({
+            ...query,
+            date_from: daysBefore(query.date_to, LOOKBACK_DAYS),
+          })
           return
         }
         setScenes(r.features)
@@ -218,7 +236,11 @@ export default function App() {
     if (!query || !app) return
     setOrdering(true)
     try {
-      const order = await createOrder({ app_id: app.id, place: query.place, bbox: query.bbox })
+      const order = await createOrder({
+        app_id: app.id,
+        place: query.place,
+        bbox: query.bbox,
+      })
       toast.success(`Mission booked: ${app.name}`, {
         description: `${order.usage.passes_booked} passes reserved · €${order.usage.committed_eur} committed`,
       })
@@ -259,7 +281,37 @@ export default function App() {
     })
     setTab('mission')
     setView('explore')
+    setAutoPreview(true)
   }
+
+  const handlePreview = useCallback(async () => {
+    if (!app || !bbox) return
+    setPreviewLoading(true)
+    setPreviewError(null)
+    try {
+      setPreview(await runPreview(app.id, bbox))
+      setPreviewVisible(true)
+    } catch (e) {
+      setPreview(null)
+      setPreviewError((e as Error).message)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }, [app, bbox])
+
+  // A result belongs to one app and area: drop it when either changes.
+  useEffect(() => {
+    setPreview(null)
+    setPreviewError(null)
+  }, [appId, bbox])
+
+  // Opening a mission from "My missions" shows a sample of its output straight away.
+  useEffect(() => {
+    if (autoPreview && app && bbox) {
+      setAutoPreview(false)
+      if (PREVIEWABLE.has(app.id)) handlePreview()
+    }
+  }, [autoPreview, app, bbox, handlePreview])
 
   const selectScene = (id: string) => {
     setTab('imagery')
@@ -373,6 +425,16 @@ export default function App() {
                 onChange={setAppId}
               />
 
+              <PreviewCard
+                app={app}
+                preview={preview}
+                loading={previewLoading}
+                error={previewError}
+                visible={previewVisible}
+                onRun={handlePreview}
+                onToggle={() => setPreviewVisible(!previewVisible)}
+              />
+
               <Tabs
                 value={tab}
                 onValueChange={(v) => {
@@ -439,6 +501,8 @@ export default function App() {
           activePassIndex={activePass}
           onSceneClick={selectScene}
           onSearchArea={handleSearchArea}
+          preview={preview}
+          previewVisible={previewVisible}
         />
       </main>
       <Toaster position="bottom-center" />
@@ -449,9 +513,13 @@ export default function App() {
 function Intro() {
   const steps = [
     ['Ask', 'Describe what you need to know, and where, in English or French.'],
-    ['Match', 'The assistant picks the AI app that answers it, from apps that run onboard satellites.'],
+    [
+      'Match',
+      'The assistant picks the AI app that answers it, from apps that run onboard satellites.',
+    ],
     ['Plan', 'See when a satellite able to run it passes over your area, what you get and when.'],
-    ['Compare', 'Check the latest real Sentinel-2 image of the area, at full resolution.'],
+    ['Try', 'Run a preview of the app on the latest real Sentinel-2 image: ships, water, crops.'],
+    ['Order', 'Book the mission: passes are reserved, metered and billed as they are flown.'],
   ]
   return (
     <ol className="space-y-3">

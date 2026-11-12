@@ -1,4 +1,4 @@
-import type { Feature, LineString, MultiPolygon, Polygon } from 'geojson'
+import type { Feature, LineString, MultiPolygon, Point, Polygon } from 'geojson'
 
 export type BBox = [west: number, south: number, east: number, north: number]
 
@@ -35,13 +35,16 @@ export interface SceneProps {
   datetime: string
   platform: string | null
   cloud_cover: number | null
+  coverage: number // share of the area inside the footprint, 0..1
   tile: string | null
   thumbnail: string | null
   visual: string | null
   stac_url: string | null
 }
 
-export type Scene = Feature<Polygon | MultiPolygon, SceneProps> & { id: string }
+export type Scene = Feature<Polygon | MultiPolygon, SceneProps> & {
+  id: string
+}
 
 export interface ScenesResponse {
   type: 'FeatureCollection'
@@ -116,7 +119,10 @@ export function searchScenes(q: SearchQuery, signal?: AbortSignal) {
 }
 
 export function predictPasses(bbox: BBox, days = 5, signal?: AbortSignal) {
-  const params = new URLSearchParams({ bbox: bboxParam(bbox), days: String(days) })
+  const params = new URLSearchParams({
+    bbox: bboxParam(bbox),
+    days: String(days),
+  })
   return request<PassesResponse>(`/api/passes?${params}`, { signal })
 }
 
@@ -182,4 +188,41 @@ export function createOrder(body: { app_id: string; place: string; bbox: BBox; d
 }
 
 export const cancelOrder = (id: string) =>
-  request<Order>(`/api/orders/${id}/cancel`, { method: 'POST', headers: accountHeaders() })
+  request<Order>(`/api/orders/${id}/cancel`, {
+    method: 'POST',
+    headers: accountHeaders(),
+  })
+
+// --- Previews of an app's output on a real image, and live satellites -----------------------
+
+/** Apps whose output can be previewed with a ground-side baseline on public Sentinel-2 bands. */
+export const PREVIEWABLE = new Set(['vessel-detection', 'flood-mapping', 'crop-health'])
+
+export interface Preview {
+  scene_id: string
+  datetime: string
+  cloud_cover: number | null
+  app_id: string
+  window: BBox
+  coverage: number
+  pixel_m: number
+  image?: string // data URL of a raster result, georeferenced on `window`
+  features?: Feature<Point, { length_m: number; area_m2: number }>[]
+  summary: Record<string, number | null>
+}
+
+/** The API picks the clearest recent image covering the area and runs the app's baseline on it. */
+export function runPreview(appId: string, bbox: BBox, signal?: AbortSignal) {
+  const params = new URLSearchParams({ bbox: bboxParam(bbox) })
+  return request<Preview>(`/api/preview/${appId}?${params}`, { signal })
+}
+
+export interface SatelliteTle {
+  name: string
+  norad_id: number
+  line1: string
+  line2: string
+}
+
+export const fetchSatellites = () =>
+  request<{ tle_age_hours: number; satellites: SatelliteTle[] }>('/api/satellites')

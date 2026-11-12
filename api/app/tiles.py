@@ -4,25 +4,9 @@ Only scene ids are accepted, never URLs: the COG location is looked up in the ST
 must live in the public Sentinel-2 bucket, so the endpoint can't be used to fetch arbitrary hosts.
 """
 
-import os
 import re
 from functools import lru_cache
 from urllib.parse import urlparse
-
-# rasterio wheels ship their own PROJ database; a system-wide PROJ_LIB (e.g. set by a PostGIS
-# install) points them at an incompatible one.
-os.environ.pop("PROJ_LIB", None)
-os.environ.pop("PROJ_DATA", None)
-# Read public COGs over HTTP efficiently: no S3 credentials, no directory listing, merged ranges.
-for k, v in {
-    "AWS_NO_SIGN_REQUEST": "YES",
-    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
-    "GDAL_HTTP_MULTIPLEX": "YES",
-    "VSI_CACHE": "TRUE",
-    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif",
-}.items():
-    os.environ.setdefault(k, v)
 
 import httpx
 from rio_tiler.errors import TileOutsideBounds
@@ -34,28 +18,32 @@ SCENE_ID = re.compile(r"^S2[A-D]_\d{2}[A-Z]{3}_\d{8}_\d+_L2A$")
 ALLOWED_HOST = "sentinel-cogs.s3.us-west-2.amazonaws.com"
 MIN_ZOOM, MAX_ZOOM = 8, 16  # below 8 a tile spans many scenes; above 16 is beyond 10 m pixels
 
-_visual_urls: dict[str, str] = {}
+_assets: dict[str, dict[str, str]] = {}
 
 
 class SceneNotFound(Exception):
     pass
 
 
-async def visual_url(http: httpx.AsyncClient, scene_id: str) -> str:
+async def asset_url(http: httpx.AsyncClient, scene_id: str, asset: str = "visual") -> str:
+    """URL of one band/asset of a scene, looked up in STAC and checked against the bucket."""
     if not SCENE_ID.match(scene_id):
         raise SceneNotFound("Invalid scene id")
-    if scene_id in _visual_urls:
-        return _visual_urls[scene_id]
-    s = get_settings()
-    r = await http.get(f"{s.stac_url}/collections/{s.stac_collection}/items/{scene_id}")
-    if r.status_code == 404:
-        raise SceneNotFound("Unknown scene")
-    r.raise_for_status()
-    href = r.json().get("assets", {}).get("visual", {}).get("href", "")
+    if scene_id not in _assets:
+        s = get_settings()
+        r = await http.get(f"{s.stac_url}/collections/{s.stac_collection}/items/{scene_id}")
+        if r.status_code == 404:
+            raise SceneNotFound("Unknown scene")
+        r.raise_for_status()
+        _assets[scene_id] = {k: v.get("href", "") for k, v in r.json().get("assets", {}).items()}
+    href = _assets[scene_id].get(asset, "")
     if urlparse(href).hostname != ALLOWED_HOST:
-        raise SceneNotFound("Scene has no true-colour image in the public bucket")
-    _visual_urls[scene_id] = href
+        raise SceneNotFound(f"Scene has no '{asset}' image in the public bucket")
     return href
+
+
+async def visual_url(http: httpx.AsyncClient, scene_id: str) -> str:
+    return await asset_url(http, scene_id, "visual")
 
 
 @lru_cache(maxsize=512)

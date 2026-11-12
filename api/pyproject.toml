@@ -9,6 +9,7 @@ dependencies = [
     "openai>=3.49.0",
     "pydantic-settings>=2.16.2",
     "rio-tiler>=9.4.13",
+    "scipy>=1.18.1",
     "shapely>=2.2.0",
     "skyfield>=1.55",
     "uvicorn[standard]>=0.54.0",

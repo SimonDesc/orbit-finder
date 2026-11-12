@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
-from app import orbits, stac, tiles
+from app import analysis, orbits, stac, tiles
 from app.catalog import APPS_BY_ID, CATALOG, App
 from app.config import get_settings
 from app.geo import BBox
@@ -116,6 +116,80 @@ async def scene_tile(scene_id: str, z: int, x: int, y: int, http: Http) -> Respo
     if data is None:
         return Response(status_code=204, headers=headers)
     return Response(data, media_type="image/webp", headers=headers)
+
+
+PREVIEW_LOOKBACK_DAYS = 90
+PREVIEW_MAX_CLOUD = 15
+
+
+@api.get(
+    "/preview/{app_id}",
+    summary="Run a ground-side preview of an onboard app on the best recent Sentinel-2 image",
+    dependencies=[Depends(RateLimiter(max_calls=12, per_seconds=60))],
+)
+async def app_preview(app_id: str, http: Http, box: Box) -> dict:
+    assets = analysis.PREVIEWS.get(app_id)
+    if not assets:
+        raise HTTPException(404, "No preview available for this app yet")
+    window = analysis.analysis_window(tuple(box.as_list()))
+    today = datetime.now(UTC).date()
+    try:
+        found = await stac.search_scenes(
+            http,
+            BBox(*window),
+            today - timedelta(days=PREVIEW_LOOKBACK_DAYS),
+            today,
+            PREVIEW_MAX_CLOUD,
+            100,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"STAC catalog unavailable: {exc}") from exc
+    # A sample output needs the whole window: full coverage first, then the most recent.
+    scenes = sorted(
+        found["features"],
+        key=lambda f: (round(f["properties"]["coverage"], 1), f["properties"]["datetime"]),
+        reverse=True,
+    )
+    if not scenes or scenes[0]["properties"]["coverage"] < 0.5:
+        raise HTTPException(
+            404, f"No clear image of this area in the last {PREVIEW_LOOKBACK_DAYS} days"
+        )
+    scene = scenes[0]
+    try:
+        urls = tuple([await tiles.asset_url(http, scene["id"], a) for a in assets])
+    except tiles.SceneNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, f"STAC catalog unavailable: {exc}") from exc
+    # Vessels: a second clear date lets the detector drop rocks and other static objects. Same
+    # tile (identical footprint), at least a week apart so ships at anchor have moved.
+    reference = reference_date = None
+    when = datetime.fromisoformat(scene["properties"]["datetime"])
+    others = [
+        s
+        for s in scenes[1:]
+        if s["properties"]["tile"] == scene["properties"]["tile"]
+        and abs(datetime.fromisoformat(s["properties"]["datetime"]) - when) >= timedelta(days=7)
+    ]
+    if app_id == "vessel-detection" and others:
+        try:
+            reference = await tiles.asset_url(http, others[0]["id"], "nir")
+        except (tiles.SceneNotFound, httpx.HTTPError):
+            reference = None
+        else:
+            reference_date = others[0]["properties"]["datetime"]
+    try:
+        result = await run_in_threadpool(analysis.run_preview, app_id, urls, window, reference)
+    except analysis.AnalysisError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    props = scene["properties"]
+    return {
+        "scene_id": scene["id"],
+        "datetime": props["datetime"],
+        "cloud_cover": props["cloud_cover"],
+        "reference_datetime": reference_date if reference else None,
+        **result,
+    }
 
 
 # --- Marketplace: accounts, entitlements, orders, metering ----------------------------------
@@ -238,6 +312,26 @@ async def passes(
         "days": days,
         "tle_age_hours": orbits.tle_age_hours(sats, now),
         "passes": result,
+    }
+
+
+@api.get("/satellites", summary="Current TLEs of the constellation, for live map propagation")
+async def satellites(http: Http) -> dict:
+    try:
+        sats = await orbits.get_satellites(http)
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(502, f"TLE source unavailable: {exc}") from exc
+    return {
+        "tle_age_hours": orbits.tle_age_hours(sats, datetime.now(UTC)),
+        "satellites": [
+            {
+                "name": s.name,
+                "norad_id": s.model.satnum,
+                "line1": s.tle_lines[0],
+                "line2": s.tle_lines[1],
+            }
+            for s in sats
+        ],
     }
 
 

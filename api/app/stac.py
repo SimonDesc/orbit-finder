@@ -1,6 +1,8 @@
 from datetime import date
 
 import httpx
+from shapely.geometry import box as shapely_box
+from shapely.geometry import shape
 
 from app.config import get_settings
 from app.geo import BBox
@@ -28,7 +30,7 @@ async def search_scenes(
     r.raise_for_status()
     data = r.json()
 
-    features = [_slim(f) for f in data.get("features", [])]
+    features = [_slim(f, bbox) for f in data.get("features", [])]
     return {
         "type": "FeatureCollection",
         "features": features,
@@ -36,7 +38,16 @@ async def search_scenes(
     }
 
 
-def _slim(feature: dict) -> dict:
+def coverage(geometry: dict | None, bbox: BBox) -> float:
+    """Share of the area inside the scene footprint: a tile edge or a swath edge often cuts it."""
+    area = shapely_box(*bbox.as_list())
+    try:
+        return round(shape(geometry).intersection(area).area / area.area, 3) if geometry else 0.0
+    except (ValueError, TypeError, AttributeError):
+        return 0.0
+
+
+def _slim(feature: dict, bbox: BBox) -> dict:
     """Keep only what the UI needs; the full item stays reachable through `stac_url`."""
     p = feature.get("properties", {})
     assets = feature.get("assets", {})
@@ -51,6 +62,7 @@ def _slim(feature: dict) -> dict:
             "datetime": p.get("datetime"),
             "platform": p.get("platform"),
             "cloud_cover": p.get("eo:cloud_cover"),
+            "coverage": coverage(feature.get("geometry"), bbox),
             "tile": p.get("grid:code"),
             "thumbnail": assets.get("thumbnail", {}).get("href"),
             "visual": assets.get("visual", {}).get("href"),

@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 
 const EXAMPLES = [
   'Which fields around Toulouse were flooded after last week’s storm?',
-  'Ships waiting outside the port of Marseille',
+  'Ships waiting at anchor within 15 km of Fos-sur-Mer',
   'Détecter les départs de feu dans le massif des Maures',
   'Nouvelles constructions autour de Blagnac depuis septembre',
 ]

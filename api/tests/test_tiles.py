@@ -15,7 +15,7 @@ def anyio_backend():
 
 @pytest.fixture(autouse=True)
 def clear_cache():
-    tiles._visual_urls.clear()
+    tiles._assets.clear()
 
 
 def stac_returning(href: str):

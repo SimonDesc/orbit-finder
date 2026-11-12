@@ -49,7 +49,9 @@ def parse_tle(text: str) -> list[EarthSatellite]:
     for i in range(0, len(lines) - 2, 3):
         name, l1, l2 = lines[i : i + 3]
         if l1.startswith("1 ") and l2.startswith("2 "):
-            sats.append(EarthSatellite(l1, l2, name.strip(), _ts))
+            sat = EarthSatellite(l1, l2, name.strip(), _ts)
+            sat.tle_lines = (l1, l2)  # kept for clients that propagate themselves
+            sats.append(sat)
     return sats
 
 
