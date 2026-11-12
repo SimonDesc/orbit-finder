@@ -14,6 +14,13 @@ satellite passes over that area.
 - **Data**: Earth Search STAC (Sentinel-2 L2A), CelesTrak TLEs, Nominatim geocoding
 - **Deploy**: one Docker image (API + static frontend) — runs on Coolify, portable to Cloud Run
 
+## Deploy
+
+One Dockerfile at the repo root builds the frontend and serves it from the API container on
+port 8000. Required env var: `OPENROUTER_API_KEY` (optional: `LLM_MODEL`). Mount a volume on
+`/app/data` to keep the orbit cache across deploys. The demo runs on Coolify; the same image
+runs unchanged on Google Cloud Run.
+
 ## Run locally
 
 ```bash
