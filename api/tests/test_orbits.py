@@ -1,5 +1,9 @@
 from datetime import UTC, datetime
 
+import httpx
+import pytest
+
+from app import orbits
 from app.geo import BBox
 from app.orbits import SENTINEL2_HALF_SWATH_KM, find_passes, parse_tle
 
@@ -43,3 +47,26 @@ def test_passes_over_toulouse():
         assert p["direction"] == "descending"
         assert 9 <= int(p["time"][11:13]) <= 12
     assert all(p["direction"] == "ascending" for p in passes if not p["daylight"])
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_tle_fetch_avoids_deflate_and_falls_back_to_cache(monkeypatch):
+    monkeypatch.setattr(orbits, "_cache", None)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["accept-encoding"])
+        return httpx.Response(200 if len(seen) == 1 else 500, text=TLE)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        first = await orbits.get_satellites(http)
+        orbits._cache.fetched_at = 0  # force a refresh, which fails
+        second = await orbits.get_satellites(http)
+
+    assert seen == ["gzip", "gzip"]
+    assert len(first) == 3 and second == first

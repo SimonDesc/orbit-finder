@@ -6,6 +6,7 @@ operator's real acquisition plan.
 """
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -24,6 +25,7 @@ COARSE_STEP_S = 60
 TRACK_HALF_SPAN_S = 120
 TLE_TTL_S = 6 * 3600  # CelesTrak updates a few times a day and asks clients to cache
 
+log = logging.getLogger(__name__)
 _ts = load.timescale()  # uses skyfield's built-in time data, no download
 
 
@@ -53,11 +55,23 @@ async def get_satellites(http: httpx.AsyncClient) -> list[EarthSatellite]:
         if _cache and time.time() - _cache.fetched_at < TLE_TTL_S:
             return _cache.satellites
         s = get_settings()
-        r = await http.get(s.celestrak_url, params={"NAME": s.celestrak_name, "FORMAT": "TLE"})
-        r.raise_for_status()
-        sats = parse_tle(r.text)
-        if not sats:
-            raise RuntimeError("CelesTrak returned no TLE")
+        try:
+            r = await http.get(
+                s.celestrak_url,
+                params={"NAME": s.celestrak_name, "FORMAT": "TLE"},
+                # CelesTrak answers 500 when "deflate" is offered (httpx's default).
+                headers={"Accept-Encoding": "gzip"},
+            )
+            r.raise_for_status()
+            sats = parse_tle(r.text)
+            if not sats:
+                raise RuntimeError("CelesTrak returned no TLE")
+        except (httpx.HTTPError, RuntimeError) as exc:
+            # TLEs stay accurate for days: a stale set beats an error page.
+            if _cache:
+                log.warning("TLE refresh failed, serving cached set: %s", exc)
+                return _cache.satellites
+            raise
         _cache = _TleCache(sats, time.time())
         return sats
 
